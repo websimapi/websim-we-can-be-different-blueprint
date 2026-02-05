@@ -37,7 +37,7 @@ const state = {
 // --- Three.js Setup ---
 
 const container = document.getElementById('canvas-container');
-const renderer = new THREE.WebGLRenderer({ antialias: false });
+const renderer = new THREE.WebGLRenderer({ antialias: false, autoClear: false });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 container.appendChild(renderer.domElement);
@@ -411,9 +411,9 @@ function updatePhysics() {
         checkCollisions(p, 'y');
         
         // Floor clamp (Respawn logic)
-        // Lowered threshold significantly (-50) to prevent false positives
-        if (p.pos.y < -50) {
-            p.pos.y = 5;
+        // Lowered threshold even more to prevent accidental triggers during lag
+        if (p.pos.y < -100) {
+            p.pos.y = 10;
             p.vel.set(0,0,0);
         }
     });
@@ -422,17 +422,23 @@ function updatePhysics() {
 function checkCollisions(p, axis) {
     // Simple AABB
     const playerBox = new THREE.Box3();
-    const size = new THREE.Vector3(0.8, 1.8, 0.8); // Thicker collider to prevent slipping/tunneling
+    const size = new THREE.Vector3(0.6, 1.7, 0.6); // Reduced width to prevent snagging on walls
     playerBox.setFromCenterAndSize(p.pos, size);
 
     for (let plat of state.platforms) {
         if (playerBox.intersectsBox(plat.box)) {
+            
+            // X/Z Collision: Ignore if we are effectively on top of the platform
+            // This prevents the floor from ejecting the player sideways
+            if (axis === 'x' || axis === 'z') {
+                const stepHeight = 0.2; // Tolerance for "standing on"
+                if (p.pos.y >= plat.box.max.y - stepHeight) continue;
+            }
+
             if (axis === 'y') {
                 const platCenterY = (plat.box.min.y + plat.box.max.y) / 2;
                 // Robust landing: if we are mostly above the platform center, treat as landing
                 if (p.pos.y > platCenterY) {
-                    // Only land if we aren't moving up rapidly (allows jumping through thin platforms if desired, but here we want solidity)
-                    // We check vel.y <= 0.01 to catch standing (0) and falling (<0)
                     if (p.vel.y <= 0.01) { 
                         p.pos.y = plat.box.max.y + size.y/2;
                         p.vel.y = 0;
@@ -495,6 +501,9 @@ function animate(t) {
     
     updateMeshes();
     
+    // Clear entire screen before rendering passes (since autoClear is false)
+    renderer.clear();
+
     const w = window.innerWidth;
     const h = window.innerHeight;
 
