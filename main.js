@@ -229,7 +229,8 @@ const CHUNK_SIZE = 40;
 const chunks = new Map(); // "x,z" -> { meshes: [], colliders: [] }
 
 // Shared Assets for Chunks
-const floorGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE);
+// Slightly larger geometry to prevent visual seams between chunks
+const floorGeo = new THREE.PlaneGeometry(CHUNK_SIZE + 0.5, CHUNK_SIZE + 0.5);
 const fUv = floorGeo.attributes.uv;
 for(let i=0; i<fUv.count; i++) fUv.setXY(i, fUv.getX(i)*4, fUv.getY(i)*4);
 
@@ -263,10 +264,11 @@ function createChunk(cx, cz) {
     objects.meshes.push({ scene: sceneHuman, mesh: planeHuman });
 
     // Floor Collider
+    // Overlap chunk colliders (size + 2) to physically seal gaps and prevent falling through
     const floorCol = {
         box: new THREE.Box3().setFromCenterAndSize(
             new THREE.Vector3(xOff, -5, zOff), 
-            new THREE.Vector3(CHUNK_SIZE, 10, CHUNK_SIZE)
+            new THREE.Vector3(CHUNK_SIZE + 2, 10, CHUNK_SIZE + 2)
         )
     };
     state.platforms.push(floorCol);
@@ -461,9 +463,10 @@ function updatePhysics() {
         p.onGround = false;
         checkCollisions(p, 'y');
         
-        // Floor clamp
-        if (p.pos.y < -5) {
-            p.pos.y = 10;
+        // Floor clamp (Respawn logic)
+        // Lowered threshold significantly (-50) to prevent false positives
+        if (p.pos.y < -50) {
+            p.pos.y = 5;
             p.vel.set(0,0,0);
         }
     });
