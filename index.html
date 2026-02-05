@@ -5,47 +5,45 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>We Can Be Different - Interactive Blueprint</title>
     <link rel="stylesheet" href="styles.css">
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://esm.sh/three@0.160.0",
+                "three/addons/": "https://esm.sh/three@0.160.0/examples/jsm/",
+                "nipplejs": "https://esm.sh/nipplejs@0.10.1"
+            }
+        }
+    </script>
 </head>
 <body>
 
 <div id="game-root">
     
-    <!-- AI WORLD (Base Layer) -->
-    <div class="world-layer ai-layer" id="world-ai">
-        <div class="game-content">
-            <!-- Game entities injected here via JS -->
-        </div>
-        <div class="ui-overlay">
-            <div class="stat-box">SYS.OP: ONLINE</div>
-            <div class="stat-box">VECTORS: LOCKED</div>
-        </div>
+    <!-- Canvas Container -->
+    <div id="canvas-container"></div>
+
+    <!-- Mobile Controls -->
+    <div id="mobile-ui" class="hidden-desktop">
+        <div id="zone-left" class="touch-zone"></div>
+        <div id="zone-right" class="touch-zone"></div>
+        <button id="btn-jump-p1" class="touch-btn">JUMP</button>
+        <button id="btn-jump-p2" class="touch-btn">JUMP</button>
     </div>
 
-    <!-- HUMAN WORLD (Top Layer - Clipped) -->
-    <div class="world-layer human-layer" id="world-human">
-        <div class="game-content">
-            <!-- Game entities injected here via JS -->
+    <!-- UI Overlay -->
+    <div class="ui-layer">
+        <div class="hud-top">
+            <div class="stat-box ai-stat">SYS.OP: ONLINE</div>
+            <div class="doodle-text human-stat">Let's play!</div>
         </div>
-        <div class="ui-overlay">
-            <div class="doodle-text">Just having fun...</div>
-            <div class="doodle-text" style="top:50px">Don't fall!</div>
-        </div>
-    </div>
-
-    <!-- Split Slider -->
-    <div class="split-bar" id="split-bar">
-        <div class="split-knob">
-            <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M8 19l-5-7 5-7v14zm8-14l5 7-5 7V5z"/></svg>
-        </div>
-        <div class="split-line"></div>
-    </div>
-
-    <!-- Controls / Info -->
-    <div class="hud">
-        <div class="hud-panel">
-            <h3>Co-Op Prototype</h3>
-            <p><span class="key">WASD</span> AI Drone <span class="key">ARROWS</span> Sketch Human</p>
-            <button id="toggle-cam">Toggle Camera: Manual</button>
+        <div class="hud-bottom">
+            <div class="hud-panel">
+                <h3>Dual Reality Protocol</h3>
+                <p>
+                    <span style="color:var(--ai-primary)">P1 (AI): WASD + Space</span> | 
+                    <span style="color:var(--human-bg); text-shadow: 0 0 2px black;">P2 (Human): Arrows + Shift</span>
+                </p>
+            </div>
         </div>
     </div>
 

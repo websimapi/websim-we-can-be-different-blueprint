@@ -1,254 +1,440 @@
 /**
  * Main Game Logic
- * "We Can Be Different" Prototype
- * 
- * Concept: Two rendering layers (AI vs Human) sharing the same state.
+ * "We Can Be Different" - 3D Co-op Prototype
  */
 
-// --- Game State ---
+import * as THREE from 'three';
+import nipplejs from 'nipplejs';
 
-const gameState = {
-    players: [
-        { id: 1, x: 100, y: 300, vx: 0, vy: 0, width: 40, height: 60, color: 'blue', type: 'drone', onGround: false },
-        { id: 2, x: 200, y: 300, vx: 0, vy: 0, width: 40, height: 60, color: 'red', type: 'human', onGround: false }
-    ],
-    platforms: [
-        { x: 50, y: 400, w: 200, h: 20 },
-        { x: 300, y: 350, w: 150, h: 20 },
-        { x: 500, y: 250, w: 100, h: 20 },
-        { x: 100, y: 200, w: 100, h: 20 },
-        { x: 0, y: 550, w: 800, h: 50 } // Floor
-    ],
-    keys: {},
-    gravity: 0.8,
+// --- Configuration ---
+
+const CONF = {
+    moveSpeed: 0.15,
+    jumpForce: 0.3,
+    gravity: 0.015,
     friction: 0.85,
-    speed: 1,
-    jump: -15,
-    cameraMode: 'manual', // 'manual' | 'follow-p1' | 'center'
-    splitPos: 50, // Percentage
-    isPortrait: false
+    camOffset: new THREE.Vector3(0, 6, 12),
+    bubbleRadius: 0.2
 };
 
-// --- DOM References ---
+// --- Global State ---
 
-const root = document.getElementById('game-root');
-const aiLayer = document.querySelector('.ai-layer .game-content');
-const humanLayer = document.querySelector('.human-layer .game-content');
+const state = {
+    keys: {},
+    p1: { pos: new THREE.Vector3(-2, 1, 0), vel: new THREE.Vector3(), onGround: false },
+    p2: { pos: new THREE.Vector3(2, 1, 0), vel: new THREE.Vector3(), onGround: false },
+    platforms: [], // { mesh, box }
+    joystickL: null,
+    joystickR: null,
+    joyLData: { x: 0, y: 0 },
+    joyRData: { x: 0, y: 0 }
+};
 
-// --- Initialization ---
+// --- Three.js Setup ---
 
-function init() {
-    // Generate DOM elements for both layers
-    [aiLayer, humanLayer].forEach(layer => {
-        // Create Platforms
-        gameState.platforms.forEach(p => {
-            const el = document.createElement('div');
-            el.className = 'platform';
-            el.style.left = p.x + 'px';
-            el.style.top = p.y + 'px';
-            el.style.width = p.w + 'px';
-            el.style.height = p.h + 'px';
-            layer.appendChild(el);
-        });
+const container = document.getElementById('canvas-container');
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+container.appendChild(renderer.domElement);
 
-        // Create Players
-        gameState.players.forEach(p => {
-            const el = document.createElement('div');
-            el.className = `player player-${p.id}`;
-            el.id = `p${p.id}-${layer.parentElement.classList.contains('ai-layer') ? 'ai' : 'human'}`;
-            el.style.width = p.width + 'px';
-            el.style.height = p.height + 'px';
-            layer.appendChild(el);
-        });
-    });
+const loader = new THREE.TextureLoader();
 
-    setupInput();
-    setupSplitter();
+// Materials & Textures
+const texAI = loader.load('./ai_blueprint_bg.png');
+const texHuman = loader.load('./human_blueprint_bg.png');
+const texCharAI = loader.load('./char_ai.png');
+const texCharHuman = loader.load('./char_human.png');
+const texPlatHuman = loader.load('./platform_texture.png');
+texPlatHuman.wrapS = texPlatHuman.wrapT = THREE.RepeatWrapping;
+
+// Scenes
+const sceneAI = new THREE.Scene();
+sceneAI.background = texAI;
+const sceneHuman = new THREE.Scene();
+sceneHuman.background = texHuman;
+
+// Camera (Shared)
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+
+// Render Targets
+const rtAI = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
+const rtHuman = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
+
+// Post-Processing Quad
+const postScene = new THREE.Scene();
+const postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const blendUniforms = {
+    tAI: { value: null },
+    tHuman: { value: null },
+    uP1: { value: new THREE.Vector2(0.5, 0.5) },
+    uP2: { value: new THREE.Vector2(0.5, 0.5) },
+    uRatio: { value: window.innerWidth / window.innerHeight },
+    uTime: { value: 0 }
+};
+
+const blendMaterial = new THREE.ShaderMaterial({
+    uniforms: blendUniforms,
+    vertexShader: `
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        uniform sampler2D tAI;
+        uniform sampler2D tHuman;
+        uniform vec2 uP1;
+        uniform vec2 uP2;
+        uniform float uRatio;
+        uniform float uTime;
+        varying vec2 vUv;
+
+        void main() {
+            vec4 colAI = texture2D(tAI, vUv);
+            vec4 colHuman = texture2D(tHuman, vUv);
+            
+            // Correct for aspect ratio
+            vec2 aspect = vec2(uRatio, 1.0);
+            vec2 uvC = vUv * aspect;
+            vec2 p1C = uP1 * aspect;
+            vec2 p2C = uP2 * aspect;
+
+            // Base split: Left is AI (1.0), Right is Human (0.0)
+            float split = smoothstep(0.498, 0.502, 1.0 - vUv.x);
+            
+            // Bubbles
+            float r = 0.2; // Bubble radius
+            float d1 = length(uvC - p1C);
+            float d2 = length(uvC - p2C);
+            
+            float b1 = 1.0 - smoothstep(r, r + 0.05, d1); // AI Bubble
+            float b2 = 1.0 - smoothstep(r, r + 0.05, d2); // Human Bubble
+            
+            // Logic: Split + AI Bubble - Human Bubble
+            float mask = clamp(split + b1 - b2, 0.0, 1.0);
+            
+            // Glitch effect on blend edge
+            if (mask > 0.01 && mask < 0.99) {
+                float noise = fract(sin(dot(vUv * uTime, vec2(12.9898, 78.233))) * 43758.5453);
+                mask += (noise - 0.5) * 0.1;
+            }
+
+            gl_FragColor = mix(colHuman, colAI, clamp(mask, 0.0, 1.0));
+        }
+    `
+});
+
+const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), blendMaterial);
+postScene.add(quad);
+
+// --- Game Object Factories ---
+
+function createPlatform(x, y, z, w, h, d) {
+    const geo = new THREE.BoxGeometry(w, h, d);
     
-    // Check orientation
-    checkOrientation();
-    window.addEventListener('resize', checkOrientation);
-
-    // Start Loop
-    requestAnimationFrame(gameLoop);
-}
-
-function checkOrientation() {
-    gameState.isPortrait = window.innerHeight > window.innerWidth;
-}
-
-// --- Input Handling ---
-
-function setupInput() {
-    window.addEventListener('keydown', (e) => {
-        gameState.keys[e.key] = true;
+    // AI Version: Neon Wireframe / Grid
+    const matAI = new THREE.MeshBasicMaterial({ 
+        color: 0x00ffcc, 
+        wireframe: true,
+        transparent: true,
+        opacity: 0.5
     });
-    window.addEventListener('keyup', (e) => {
-        gameState.keys[e.key] = false;
+    const meshAI = new THREE.Mesh(geo, matAI);
+    meshAI.position.set(x, y, z);
+    
+    // Solid core for AI so it's not totally invisible
+    const coreAI = new THREE.Mesh(
+        new THREE.BoxGeometry(w*0.9, h*0.9, d*0.9),
+        new THREE.MeshBasicMaterial({ color: 0x001111 })
+    );
+    meshAI.add(coreAI);
+    
+    sceneAI.add(meshAI);
+
+    // Human Version: Textured
+    const matHuman = new THREE.MeshStandardMaterial({ 
+        map: texPlatHuman,
+        color: 0xffffff,
+        roughness: 1,
     });
+    const meshHuman = new THREE.Mesh(geo, matHuman);
+    meshHuman.position.set(x, y, z);
+    
+    // Scribble edges for Human (simulated with wireframe overlay)
+    const edgesHuman = new THREE.Mesh(
+        geo,
+        new THREE.MeshBasicMaterial({ color: 0x222222, wireframe: true })
+    );
+    meshHuman.add(edgesHuman);
 
-    document.getElementById('toggle-cam').onclick = () => {
-        const modes = ['manual', 'follow-p1'];
-        const currentIdx = modes.indexOf(gameState.cameraMode);
-        gameState.cameraMode = modes[(currentIdx + 1) % modes.length];
-        
-        const btn = document.getElementById('toggle-cam');
-        if (gameState.cameraMode === 'manual') btn.textContent = "Toggle Camera: Manual";
-        if (gameState.cameraMode === 'follow-p1') btn.textContent = "Toggle Camera: Auto-Split";
-    };
-}
+    sceneHuman.add(meshHuman);
 
-function setupSplitter() {
-    const slider = document.getElementById('split-bar');
-    let isDragging = false;
-
-    const onMove = (e) => {
-        if (!isDragging || gameState.cameraMode !== 'manual') return;
-
-        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-        const rect = root.getBoundingClientRect();
-
-        if (gameState.isPortrait) {
-            let y = clientY - rect.top;
-            let pct = (y / rect.height) * 100;
-            gameState.splitPos = Math.max(0, Math.min(100, pct));
-        } else {
-            let x = clientX - rect.left;
-            let pct = (x / rect.width) * 100;
-            gameState.splitPos = Math.max(0, Math.min(100, pct));
-        }
-        updateSplitVisual();
-    };
-
-    slider.addEventListener('mousedown', () => isDragging = true);
-    slider.addEventListener('touchstart', () => isDragging = true);
-    window.addEventListener('mouseup', () => isDragging = false);
-    window.addEventListener('touchend', () => isDragging = false);
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('touchmove', onMove);
-}
-
-function updateSplitVisual() {
-    root.style.setProperty('--split-pos', `${gameState.splitPos}%`);
-}
-
-// --- Physics & Logic ---
-
-function updatePhysics() {
-    // Player 1 (AI) - WASD
-    const p1 = gameState.players[0];
-    if (gameState.keys['a']) p1.vx -= gameState.speed;
-    if (gameState.keys['d']) p1.vx += gameState.speed;
-    if (gameState.keys['w'] && p1.onGround) { p1.vy = gameState.jump; p1.onGround = false; }
-
-    // Player 2 (Human) - Arrows
-    const p2 = gameState.players[1];
-    if (gameState.keys['ArrowLeft']) p2.vx -= gameState.speed;
-    if (gameState.keys['ArrowRight']) p2.vx += gameState.speed;
-    if (gameState.keys['ArrowUp'] && p2.onGround) { p2.vy = gameState.jump; p2.onGround = false; }
-
-    // Apply Physics to all players
-    gameState.players.forEach(p => {
-        p.vy += gameState.gravity;
-        p.vx *= gameState.friction;
-        
-        // Horizontal Move
-        p.x += p.vx;
-        checkCollision(p, 'x');
-
-        // Vertical Move
-        p.y += p.vy;
-        p.onGround = false; // Assume falling until collision proves otherwise
-        checkCollision(p, 'y');
-
-        // Screen Boundaries
-        const maxX = window.innerWidth - p.width;
-        const maxY = window.innerHeight; // Pit
-        if (p.x < 0) { p.x = 0; p.vx = 0; }
-        if (p.x > maxX) { p.x = maxX; p.vx = 0; }
-        
-        // Respawn if fall
-        if (p.y > maxY) {
-            p.y = 0;
-            p.vy = 0;
-        }
+    // Physics Collider
+    state.platforms.push({
+        box: new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(x,y,z), new THREE.Vector3(w, h, d))
     });
+}
 
-    // Auto Split Logic
-    if (gameState.cameraMode === 'follow-p1') {
-        const p1 = gameState.players[0];
-        // Calculate percentage of screen width P1 is at
-        let targetPct = 50;
-        if (gameState.isPortrait) {
-            targetPct = ((p1.y + p1.height/2) / window.innerHeight) * 100;
-        } else {
-            targetPct = ((p1.x + p1.width/2) / window.innerWidth) * 100;
-        }
-        // Smooth lerp
-        gameState.splitPos += (targetPct - gameState.splitPos) * 0.1;
-        updateSplitVisual();
+function createPlayer(isAI) {
+    // Both scenes contain both players, but rendered slightly differently?
+    // For now, same geometry, just ensuring they exist in both scenes.
+    
+    const texture = isAI ? texCharAI : texCharHuman;
+    const mat = new THREE.MeshBasicMaterial({ 
+        map: texture, 
+        transparent: true, 
+        side: THREE.DoubleSide
+    });
+    const geo = new THREE.PlaneGeometry(1.2, 1.8);
+    
+    const meshAI = new THREE.Mesh(geo, mat);
+    const meshHuman = new THREE.Mesh(geo, mat);
+    
+    // In AI scene, Human player is glitched?
+    if (!isAI) {
+        // Human in AI scene
+        meshAI.material = mat.clone();
+        meshAI.material.color.setHex(0xffaaaa); // Tinted red
+    } else {
+        // AI in AI scene
+        meshAI.material = mat.clone();
+        meshAI.material.emissive = new THREE.Color(0x00ffff);
+    }
+    
+    sceneAI.add(meshAI);
+    sceneHuman.add(meshHuman);
+    
+    return { meshAI, meshHuman };
+}
+
+// --- Level Generation ---
+
+// Floor
+createPlatform(0, -1, 0, 40, 2, 20);
+// Steps
+createPlatform(-5, 1, 0, 4, 1, 4);
+createPlatform(-10, 3, 0, 4, 1, 4);
+createPlatform(5, 1, 0, 4, 1, 4);
+createPlatform(10, 3, 0, 4, 1, 4);
+// Central Bridge
+createPlatform(0, 5, -5, 10, 1, 4);
+
+// Players
+const player1Obj = createPlayer(true);
+const player2Obj = createPlayer(false);
+
+// Lighting
+const ambAI = new THREE.AmbientLight(0x00ffcc, 0.5);
+sceneAI.add(ambAI);
+const dirAI = new THREE.DirectionalLight(0xffffff, 1);
+dirAI.position.set(10, 20, 10);
+sceneAI.add(dirAI);
+
+const ambHuman = new THREE.AmbientLight(0xffffff, 0.8);
+sceneHuman.add(ambHuman);
+const dirHuman = new THREE.DirectionalLight(0xffddaa, 1);
+dirHuman.position.set(-10, 20, 10);
+sceneHuman.add(dirHuman);
+
+// --- Inputs ---
+
+window.addEventListener('keydown', e => {
+    state.keys[e.key] = true;
+    state.keys[e.code] = true;
+});
+window.addEventListener('keyup', e => {
+    state.keys[e.key] = false;
+    state.keys[e.code] = false;
+});
+
+// Mobile Nipple.js
+if (window.matchMedia("(max-width: 768px)").matches) {
+    const zoneL = document.getElementById('zone-left');
+    const zoneR = document.getElementById('zone-right');
+    
+    state.joystickL = nipplejs.create({ zone: zoneL, mode: 'static', position: { left: '50%', top: '50%' }, color: 'cyan' });
+    state.joystickR = nipplejs.create({ zone: zoneR, mode: 'static', position: { left: '50%', top: '50%' }, color: 'orange' });
+    
+    state.joystickL.on('move', (evt, data) => {
+        state.joyLData.x = Math.cos(data.angle.radian) * Math.min(data.distance/50, 1);
+        state.joyLData.y = Math.sin(data.angle.radian) * Math.min(data.distance/50, 1);
+    });
+    state.joystickL.on('end', () => { state.joyLData.x = 0; state.joyLData.y = 0; });
+
+    state.joystickR.on('move', (evt, data) => {
+        state.joyRData.x = Math.cos(data.angle.radian) * Math.min(data.distance/50, 1);
+        state.joyRData.y = Math.sin(data.angle.radian) * Math.min(data.distance/50, 1);
+    });
+    state.joystickR.on('end', () => { state.joyRData.x = 0; state.joyRData.y = 0; });
+    
+    // Touch buttons
+    document.getElementById('btn-jump-p1').addEventListener('touchstart', (e) => { e.preventDefault(); doJump(state.p1); });
+    document.getElementById('btn-jump-p2').addEventListener('touchstart', (e) => { e.preventDefault(); doJump(state.p2); });
+}
+
+function doJump(p) {
+    if (p.onGround) {
+        p.vel.y = CONF.jumpForce;
+        p.onGround = false;
     }
 }
 
-function checkCollision(p, axis) {
-    for (let plat of gameState.platforms) {
-        if (p.x < plat.x + plat.w &&
-            p.x + p.width > plat.x &&
-            p.y < plat.y + plat.h &&
-            p.y + p.height > plat.y) {
-            
+// --- Physics Engine ---
+
+function updatePhysics() {
+    // Input Handling P1 (AI) - WASD or Joystick L
+    let p1x = 0, p1z = 0;
+    if (state.keys['w'] || state.keys['W']) p1z = -1;
+    if (state.keys['s'] || state.keys['S']) p1z = 1;
+    if (state.keys['a'] || state.keys['A']) p1x = -1;
+    if (state.keys['d'] || state.keys['D']) p1x = 1;
+    if (state.keys[' ']) doJump(state.p1);
+
+    if (Math.abs(state.joyLData.x) > 0.1 || Math.abs(state.joyLData.y) > 0.1) {
+        p1x = state.joyLData.x;
+        p1z = -state.joyLData.y; // Joystick up is negative Y usually
+    }
+
+    // Apply movement
+    state.p1.vel.x += p1x * CONF.moveSpeed * 0.2; // Accel
+    state.p1.vel.z += p1z * CONF.moveSpeed * 0.2;
+
+    // Input P2 (Human) - Arrows or Joystick R
+    let p2x = 0, p2z = 0;
+    if (state.keys['ArrowUp']) p2z = -1;
+    if (state.keys['ArrowDown']) p2z = 1;
+    if (state.keys['ArrowLeft']) p2x = -1;
+    if (state.keys['ArrowRight']) p2x = 1;
+    if (state.keys['Shift'] || state.keys['Enter']) doJump(state.p2);
+
+    if (Math.abs(state.joyRData.x) > 0.1 || Math.abs(state.joyRData.y) > 0.1) {
+        p2x = state.joyRData.x;
+        p2z = -state.joyRData.y;
+    }
+
+    state.p2.vel.x += p2x * CONF.moveSpeed * 0.2;
+    state.p2.vel.z += p2z * CONF.moveSpeed * 0.2;
+
+    // Physics Step
+    [state.p1, state.p2].forEach(p => {
+        p.vel.y -= CONF.gravity;
+        p.vel.x *= CONF.friction;
+        p.vel.z *= CONF.friction;
+
+        // X Movement
+        p.pos.x += p.vel.x;
+        checkCollisions(p, 'x');
+        
+        // Z Movement
+        p.pos.z += p.vel.z;
+        checkCollisions(p, 'z');
+        
+        // Y Movement
+        p.pos.y += p.vel.y;
+        p.onGround = false;
+        checkCollisions(p, 'y');
+        
+        // Floor clamp
+        if (p.pos.y < -5) {
+            p.pos.set(p === state.p1 ? -2 : 2, 5, 0);
+            p.vel.set(0,0,0);
+        }
+    });
+}
+
+function checkCollisions(p, axis) {
+    // Simple AABB
+    const playerBox = new THREE.Box3();
+    const size = new THREE.Vector3(0.6, 1.8, 0.2); // Thin collider for 2.5D feel
+    playerBox.setFromCenterAndSize(p.pos, size);
+
+    for (let plat of state.platforms) {
+        if (playerBox.intersectsBox(plat.box)) {
             if (axis === 'y') {
-                if (p.vy > 0) { // Falling down
-                    p.y = plat.y - p.height;
-                    p.vy = 0;
+                if (p.vel.y < 0) { // Landing
+                    p.pos.y = plat.box.max.y + size.y/2;
+                    p.vel.y = 0;
                     p.onGround = true;
-                } else if (p.vy < 0) { // Hitting head
-                    p.y = plat.y + plat.h;
-                    p.vy = 0;
+                } else { // Head hit
+                    p.pos.y = plat.box.min.y - size.y/2;
+                    p.vel.y = 0;
                 }
             } else if (axis === 'x') {
-                if (p.vx > 0) { // Moving right
-                    p.x = plat.x - p.width;
-                    p.vx = 0;
-                } else if (p.vx < 0) { // Moving left
-                    p.x = plat.x + plat.w;
-                    p.vx = 0;
-                }
+                if (p.vel.x > 0) p.pos.x = plat.box.min.x - size.x/2;
+                else p.pos.x = plat.box.max.x + size.x/2;
+                p.vel.x = 0;
+            } else if (axis === 'z') {
+                if (p.vel.z > 0) p.pos.z = plat.box.min.z - size.z/2;
+                else p.pos.z = plat.box.max.z + size.z/2;
+                p.vel.z = 0;
             }
         }
     }
 }
 
-// --- Render Loop ---
+// --- Main Loop ---
 
-function gameLoop() {
-    updatePhysics();
-
-    // Sync DOM positions
-    gameState.players.forEach(p => {
-        const id = p.id;
-        const pAi = document.getElementById(`p${id}-ai`);
-        const pHuman = document.getElementById(`p${id}-human`);
-
-        if (pAi && pHuman) {
-            const transform = `translate(${p.x}px, ${p.y}px)`;
-            pAi.style.transform = transform;
-            pHuman.style.transform = transform;
-            
-            // Flip sprite based on direction
-            const scaleX = p.vx < -0.1 ? -1 : 1;
-            // Apply scale inside transform or via separate property?
-            // Since we set transform above, let's append scale
-            // Note: simple assignment overwrites.
-            // Better:
-            pAi.style.transform = `translate(${p.x}px, ${p.y}px) scaleX(${scaleX})`;
-            pHuman.style.transform = `translate(${p.x}px, ${p.y}px) scaleX(${scaleX})`;
-        }
-    });
-
-    requestAnimationFrame(gameLoop);
+function updateMeshes() {
+    // Sync P1
+    player1Obj.meshAI.position.copy(state.p1.pos);
+    player1Obj.meshHuman.position.copy(state.p1.pos);
+    
+    // Sync P2
+    player2Obj.meshAI.position.copy(state.p2.pos);
+    player2Obj.meshHuman.position.copy(state.p2.pos);
+    
+    // Camera Follow (Average of P1 and P2)
+    const mid = new THREE.Vector3().addVectors(state.p1.pos, state.p2.pos).multiplyScalar(0.5);
+    camera.position.lerp(new THREE.Vector3(mid.x, mid.y, mid.z).add(CONF.camOffset), 0.1);
+    camera.lookAt(mid);
 }
 
-// Boot
-init();
+function getScreenPos(pos) {
+    const v = pos.clone().project(camera); // -1 to 1
+    return new THREE.Vector2((v.x + 1) / 2, (v.y + 1) / 2); // 0 to 1
+}
+
+function animate(t) {
+    requestAnimationFrame(animate);
+    
+    updatePhysics();
+    updateMeshes();
+    
+    // 1. Render AI Scene to Texture
+    renderer.setRenderTarget(rtAI);
+    renderer.render(sceneAI, camera);
+    
+    // 2. Render Human Scene to Texture
+    renderer.setRenderTarget(rtHuman);
+    renderer.render(sceneHuman, camera);
+    
+    // 3. Render Blend to Screen
+    renderer.setRenderTarget(null);
+    
+    // Update Uniforms
+    blendUniforms.tAI.value = rtAI.texture;
+    blendUniforms.tHuman.value = rtHuman.texture;
+    blendUniforms.uP1.value = getScreenPos(state.p1.pos);
+    blendUniforms.uP2.value = getScreenPos(state.p2.pos);
+    blendUniforms.uRatio.value = window.innerWidth / window.innerHeight;
+    blendUniforms.uTime.value = t * 0.001;
+    
+    renderer.render(postScene, postCamera);
+}
+
+// Resize handler
+window.addEventListener('resize', () => {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    renderer.setSize(w, h);
+    rtAI.setSize(w, h);
+    rtHuman.setSize(w, h);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    blendUniforms.uRatio.value = w / h;
+});
+
+// Start
+animate(0);
