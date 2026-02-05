@@ -13,7 +13,7 @@ const CONF = {
     jumpForce: 0.3,
     gravity: 0.015,
     friction: 0.85,
-    camOffset: new THREE.Vector3(0, 6, 12),
+    camOffset: new THREE.Vector3(0, 8, 14), // Pulled back slightly for split screen
     bubbleRadius: 0.2
 };
 
@@ -65,81 +65,17 @@ sceneAI.background = texAI;
 const sceneHuman = new THREE.Scene();
 sceneHuman.background = texHuman;
 
-// Camera (Shared)
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+// Cameras (Independent)
+const cameraP1 = new THREE.PerspectiveCamera(60, (window.innerWidth / 2) / window.innerHeight, 0.1, 100);
+const cameraP2 = new THREE.PerspectiveCamera(60, (window.innerWidth / 2) / window.innerHeight, 0.1, 100);
 
-// Render Targets
-const rtAI = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
-const rtHuman = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
-
-// Post-Processing Quad
-const postScene = new THREE.Scene();
-const postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-const blendUniforms = {
-    tAI: { value: null },
-    tHuman: { value: null },
-    uP1: { value: new THREE.Vector2(0.5, 0.5) },
-    uP2: { value: new THREE.Vector2(0.5, 0.5) },
-    uRatio: { value: 1.0 },
-    uTime: { value: 0 }
-};
-
-const blendMaterial = new THREE.ShaderMaterial({
-    uniforms: blendUniforms,
-    vertexShader: `
-        varying vec2 vUv;
-        void main() {
-            vUv = uv;
-            gl_Position = vec4(position, 1.0);
-        }
-    `,
-    fragmentShader: `
-        uniform sampler2D tAI;
-        uniform sampler2D tHuman;
-        uniform vec2 uP1;
-        uniform vec2 uP2;
-        uniform float uRatio;
-        uniform float uTime;
-        varying vec2 vUv;
-
-        void main() {
-            // Safety check for null textures (initially)
-            vec4 colAI = texture2D(tAI, vUv);
-            vec4 colHuman = texture2D(tHuman, vUv);
-            
-            // Correct for aspect ratio
-            vec2 aspect = vec2(uRatio, 1.0);
-            vec2 uvC = vUv * aspect;
-            vec2 p1C = uP1 * aspect;
-            vec2 p2C = uP2 * aspect;
-
-            // Base split: Left is AI (1.0), Right is Human (0.0)
-            float split = smoothstep(0.498, 0.502, 1.0 - vUv.x);
-            
-            // Bubbles
-            float r = 0.2; // Bubble radius
-            float d1 = length(uvC - p1C);
-            float d2 = length(uvC - p2C);
-            
-            float b1 = 1.0 - smoothstep(r, r + 0.05, d1); // AI Bubble
-            float b2 = 1.0 - smoothstep(r, r + 0.05, d2); // Human Bubble
-            
-            // Logic: Split + AI Bubble - Human Bubble
-            float mask = clamp(split + b1 - b2, 0.0, 1.0);
-            
-            // Glitch effect on blend edge
-            if (mask > 0.01 && mask < 0.99) {
-                float noise = fract(sin(dot(vUv * uTime, vec2(12.9898, 78.233))) * 43758.5453);
-                mask += (noise - 0.5) * 0.1;
-            }
-
-            gl_FragColor = mix(colHuman, colAI, clamp(mask, 0.0, 1.0));
-        }
-    `
-});
-
-const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), blendMaterial);
-postScene.add(quad);
+// Divider Line
+const dividerScene = new THREE.Scene();
+const divGeo = new THREE.PlaneGeometry(0.01, 2);
+const divMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+const divider = new THREE.Mesh(divGeo, divMat);
+dividerScene.add(divider);
+const dividerCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
 // --- Game Object Factories ---
 
@@ -312,25 +248,32 @@ function createChunk(cx, cz) {
 }
 
 function updateWorld() {
-    // Center point
-    const center = new THREE.Vector3().addVectors(state.p1.pos, state.p2.pos).multiplyScalar(0.5);
-    const cx = Math.round(center.x / CHUNK_SIZE);
-    const cz = Math.round(center.z / CHUNK_SIZE);
-
-    // Load nearby
-    for(let x = -1; x <= 1; x++) {
-        for(let z = -1; z <= 1; z++) {
-            const key = `${cx+x},${cz+z}`;
-            if(!chunks.has(key)) {
-                createChunk(cx+x, cz+z);
+    const keepKeys = new Set();
+    
+    // Check chunks around BOTH players independently
+    [state.p1.pos, state.p2.pos].forEach(pos => {
+        const cx = Math.round(pos.x / CHUNK_SIZE);
+        const cz = Math.round(pos.z / CHUNK_SIZE);
+        
+        // Load 3x3 grid around each player
+        for(let x = -1; x <= 1; x++) {
+            for(let z = -1; z <= 1; z++) {
+                keepKeys.add(`${cx+x},${cz+z}`);
             }
         }
-    }
+    });
 
-    // Unload far
+    // Create missing
+    keepKeys.forEach(key => {
+        if(!chunks.has(key)) {
+            const [kx, kz] = key.split(',').map(Number);
+            createChunk(kx, kz);
+        }
+    });
+
+    // Unload unused
     for(const [key, val] of chunks) {
-        const [kx, kz] = key.split(',').map(Number);
-        if(Math.abs(kx - cx) > 2 || Math.abs(kz - cz) > 2) {
+        if(!keepKeys.has(key)) {
             val.meshes.forEach(item => item.scene.remove(item.mesh));
             val.colliders.forEach(c => {
                 const idx = state.platforms.indexOf(c);
@@ -526,21 +469,14 @@ function updateMeshes() {
     player2Obj.meshAI.position.copy(state.p2.pos);
     player2Obj.meshHuman.position.copy(state.p2.pos);
     
-    // Camera Follow (Average of P1 and P2)
-    const mid = new THREE.Vector3().addVectors(state.p1.pos, state.p2.pos).multiplyScalar(0.5);
-    
-    // Dynamic zoom based on distance to keep both players in frame
-    const dist = state.p1.pos.distanceTo(state.p2.pos);
-    const zoomZ = Math.max(CONF.camOffset.z, dist * 0.9);
-    const targetCamPos = new THREE.Vector3(mid.x, mid.y + CONF.camOffset.y, mid.z + zoomZ);
-    
-    camera.position.lerp(targetCamPos, 0.1);
-    camera.lookAt(mid);
-}
+    // Independent Camera Control
+    const targetP1 = state.p1.pos.clone().add(CONF.camOffset);
+    cameraP1.position.lerp(targetP1, 0.1);
+    cameraP1.lookAt(state.p1.pos);
 
-function getScreenPos(pos) {
-    const v = pos.clone().project(camera); // -1 to 1
-    return new THREE.Vector2((v.x + 1) / 2, (v.y + 1) / 2); // 0 to 1
+    const targetP2 = state.p2.pos.clone().add(CONF.camOffset);
+    cameraP2.position.lerp(targetP2, 0.1);
+    cameraP2.lookAt(state.p2.pos);
 }
 
 function animate(t) {
@@ -549,6 +485,7 @@ function animate(t) {
     const dt = Math.min(clock.getDelta(), 0.1);
     timeAccumulator += dt;
 
+    // Check world based on players BEFORE physics to ensure ground exists
     updateWorld();
 
     while (timeAccumulator >= TIME_STEP) {
@@ -558,29 +495,25 @@ function animate(t) {
     
     updateMeshes();
     
-    // 1. Render AI Scene to Texture
-    renderer.setRenderTarget(rtAI);
-    renderer.render(sceneAI, camera);
-    
-    // 2. Render Human Scene to Texture
-    renderer.setRenderTarget(rtHuman);
-    renderer.render(sceneHuman, camera);
-    
-    // 3. Render Blend to Screen
-    renderer.setRenderTarget(null);
-    
-    // Update Uniforms safely
-    blendUniforms.tAI.value = rtAI.texture;
-    blendUniforms.tHuman.value = rtHuman.texture;
-    blendUniforms.uP1.value = getScreenPos(state.p1.pos);
-    blendUniforms.uP2.value = getScreenPos(state.p2.pos);
-    
     const w = window.innerWidth;
     const h = window.innerHeight;
-    blendUniforms.uRatio.value = h > 0 ? w / h : 1.0;
-    blendUniforms.uTime.value = t * 0.001;
-    
-    renderer.render(postScene, postCamera);
+
+    renderer.setScissorTest(true);
+
+    // Render P1 (AI World) - Left Half
+    renderer.setViewport(0, 0, w/2, h);
+    renderer.setScissor(0, 0, w/2, h);
+    renderer.render(sceneAI, cameraP1);
+
+    // Render P2 (Human World) - Right Half
+    renderer.setViewport(w/2, 0, w/2, h);
+    renderer.setScissor(w/2, 0, w/2, h);
+    renderer.render(sceneHuman, cameraP2);
+
+    renderer.setScissorTest(false);
+
+    // Render Divider Overlay
+    renderer.render(dividerScene, dividerCamera);
 }
 
 // Resize handler
@@ -588,11 +521,12 @@ window.addEventListener('resize', () => {
     const w = window.innerWidth;
     const h = window.innerHeight;
     renderer.setSize(w, h);
-    rtAI.setSize(w, h);
-    rtHuman.setSize(w, h);
-    camera.aspect = w / h;
-    camera.updateProjectionMatrix();
-    // uRatio updated in animate loop
+    
+    cameraP1.aspect = (w / 2) / h;
+    cameraP1.updateProjectionMatrix();
+    
+    cameraP2.aspect = (w / 2) / h;
+    cameraP2.updateProjectionMatrix();
 });
 
 // Start
