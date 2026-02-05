@@ -180,9 +180,11 @@ function createPlatform(x, y, z, w, h, d) {
     sceneHuman.add(meshHuman);
 
     // Physics Collider
-    state.platforms.push({
+    const collider = {
         box: new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(x,y,z), new THREE.Vector3(w, h, d))
-    });
+    };
+
+    return { meshAI, meshHuman, collider };
 }
 
 function createPlayer(isAI) {
@@ -217,17 +219,117 @@ function createPlayer(isAI) {
     return { meshAI, meshHuman };
 }
 
-// --- Level Generation ---
+// --- Level Generation (Chunk System) ---
 
-// Floor
-createPlatform(0, -1, 0, 40, 2, 20);
-// Steps
-createPlatform(-5, 1, 0, 4, 1, 4);
-createPlatform(-10, 3, 0, 4, 1, 4);
-createPlatform(5, 1, 0, 4, 1, 4);
-createPlatform(10, 3, 0, 4, 1, 4);
-// Central Bridge
-createPlatform(0, 5, -5, 10, 1, 4);
+const CHUNK_SIZE = 40;
+const chunks = new Map(); // "x,z" -> { meshes: [], colliders: [] }
+
+// Shared Assets for Chunks
+const floorGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE);
+const fUv = floorGeo.attributes.uv;
+for(let i=0; i<fUv.count; i++) fUv.setXY(i, fUv.getX(i)*4, fUv.getY(i)*4);
+
+const floorMatHuman = new THREE.MeshStandardMaterial({ map: texPlatHuman, roughness: 1.0 });
+const floorMatAI = new THREE.MeshBasicMaterial({ color: 0x050505 });
+
+function createChunk(cx, cz) {
+    const objects = { meshes: [], colliders: [] };
+    const xOff = cx * CHUNK_SIZE;
+    const zOff = cz * CHUNK_SIZE;
+
+    // 1. Floor AI
+    // Grid
+    const gridHelper = new THREE.GridHelper(CHUNK_SIZE, 10, 0x00ffcc, 0x003333);
+    gridHelper.position.set(xOff, 0, zOff);
+    sceneAI.add(gridHelper);
+    objects.meshes.push({ scene: sceneAI, mesh: gridHelper });
+    
+    // Solid backing
+    const planeAI = new THREE.Mesh(floorGeo, floorMatAI);
+    planeAI.rotation.x = -Math.PI / 2;
+    planeAI.position.set(xOff, -0.01, zOff);
+    sceneAI.add(planeAI);
+    objects.meshes.push({ scene: sceneAI, mesh: planeAI });
+
+    // 2. Floor Human
+    const planeHuman = new THREE.Mesh(floorGeo, floorMatHuman);
+    planeHuman.rotation.x = -Math.PI / 2;
+    planeHuman.position.set(xOff, 0, zOff);
+    sceneHuman.add(planeHuman);
+    objects.meshes.push({ scene: sceneHuman, mesh: planeHuman });
+
+    // Floor Collider
+    const floorCol = {
+        box: new THREE.Box3().setFromCenterAndSize(
+            new THREE.Vector3(xOff, -1, zOff), 
+            new THREE.Vector3(CHUNK_SIZE, 2, CHUNK_SIZE)
+        )
+    };
+    state.platforms.push(floorCol);
+    objects.colliders.push(floorCol);
+
+    // 3. Procedural Obstacles
+    // Deterministic random
+    const seed = Math.abs((cx * 73856093) ^ (cz * 19349663));
+    const count = 3 + (seed % 4); 
+
+    for(let i=0; i<count; i++) {
+        const r1 = ((seed + i*123) % 100) / 100; 
+        const r2 = ((seed + i*456) % 100) / 100;
+        const r3 = ((seed + i*789) % 100) / 100;
+        
+        // Keep away from center of chunk to allow walking paths
+        const ox = (r1 - 0.5) * (CHUNK_SIZE * 0.8);
+        const oz = (r2 - 0.5) * (CHUNK_SIZE * 0.8);
+        
+        // Don't block center of world (0,0)
+        if (cx === 0 && cz === 0 && Math.abs(ox) < 5 && Math.abs(oz) < 5) continue;
+
+        const px = xOff + ox;
+        const pz = zOff + oz;
+        const py = 1 + r3 * 3;
+        const w = 2 + r1 * 4;
+        const d = 2 + r2 * 4;
+
+        const obj = createPlatform(px, py, pz, w, 0.5, d);
+        objects.meshes.push({ scene: sceneAI, mesh: obj.meshAI });
+        objects.meshes.push({ scene: sceneHuman, mesh: obj.meshHuman });
+        objects.colliders.push(obj.collider);
+        state.platforms.push(obj.collider);
+    }
+
+    chunks.set(`${cx},${cz}`, objects);
+}
+
+function updateWorld() {
+    // Center point
+    const center = new THREE.Vector3().addVectors(state.p1.pos, state.p2.pos).multiplyScalar(0.5);
+    const cx = Math.round(center.x / CHUNK_SIZE);
+    const cz = Math.round(center.z / CHUNK_SIZE);
+
+    // Load nearby
+    for(let x = -1; x <= 1; x++) {
+        for(let z = -1; z <= 1; z++) {
+            const key = `${cx+x},${cz+z}`;
+            if(!chunks.has(key)) {
+                createChunk(cx+x, cz+z);
+            }
+        }
+    }
+
+    // Unload far
+    for(const [key, val] of chunks) {
+        const [kx, kz] = key.split(',').map(Number);
+        if(Math.abs(kx - cx) > 2 || Math.abs(kz - cz) > 2) {
+            val.meshes.forEach(item => item.scene.remove(item.mesh));
+            val.colliders.forEach(c => {
+                const idx = state.platforms.indexOf(c);
+                if(idx > -1) state.platforms.splice(idx, 1);
+            });
+            chunks.delete(key);
+        }
+    }
+}
 
 // Players
 const player1Obj = createPlayer(true); // AI
@@ -356,7 +458,7 @@ function updatePhysics() {
         
         // Floor clamp
         if (p.pos.y < -5) {
-            p.pos.set(p === state.p1 ? -2 : 2, 5, 0);
+            p.pos.y = 10;
             p.vel.set(0,0,0);
         }
     });
@@ -417,6 +519,7 @@ function getScreenPos(pos) {
 function animate(t) {
     requestAnimationFrame(animate);
     
+    updateWorld();
     updatePhysics();
     updateMeshes();
     
