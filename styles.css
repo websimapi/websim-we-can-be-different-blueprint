@@ -2,9 +2,9 @@
 
 :root {
   --split-pos: 50%;
-  --ai-color: #00ffcc;
-  --ai-bg: #0a0a0a;
-  --human-color: #333;
+  --ai-primary: #00ffcc;
+  --ai-bg: #050505;
+  --human-primary: #333;
   --human-bg: #f4e4bc;
 }
 
@@ -20,269 +20,305 @@ body, html {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  font-family: sans-serif;
-}
-
-#app {
-  position: relative;
-  width: 100%;
-  height: 100%;
   background: black;
 }
 
-/* --- Layers --- */
+#game-root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
 
-.split-layer {
+/* --- World Layers --- */
+
+.world-layer {
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
   overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  padding: 2rem;
-  transition: clip-path 0.1s linear;
+  will-change: clip-path;
 }
 
-/* AI Layer (Bottom layer visually, but we reveal Human over it or vice versa. 
-   Let's actually make AI the base, Human the top with clip-path) */
+.game-content {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
 
-.split-layer.ai {
+/* --- AI Layer Styling --- */
+
+.ai-layer {
   background-color: var(--ai-bg);
   background-image: url('./ai_blueprint_bg.png');
   background-size: cover;
   background-position: center;
-  color: var(--ai-color);
-  font-family: 'Roboto Mono', monospace;
   z-index: 1;
+  font-family: 'Roboto Mono', monospace;
+  color: var(--ai-primary);
 }
 
-.split-layer.human {
+.ai-layer .platform {
+  position: absolute;
+  background: rgba(0, 10, 20, 0.9);
+  border: 1px solid var(--ai-primary);
+  box-shadow: 0 0 10px rgba(0, 255, 204, 0.2);
+}
+
+.ai-layer .platform::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(90deg, transparent 49%, var(--ai-primary) 50%, transparent 51%);
+    background-size: 20px 100%;
+    opacity: 0.1;
+}
+
+.ai-layer .player {
+    position: absolute;
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+/* AI Layer specific representation of players */
+.ai-layer .player-1 { /* The Drone */
+    background-image: url('./char_ai.png');
+    filter: drop-shadow(0 0 5px var(--ai-primary));
+}
+.ai-layer .player-2 { /* The Human in AI vision */
+    background: transparent;
+    border: 1px dashed var(--ai-primary);
+    border-radius: 50%;
+}
+.ai-layer .player-2::before {
+    content: 'UNKNOWN_ENTITY';
+    position: absolute;
+    top: -20px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 8px;
+    white-space: nowrap;
+    color: var(--ai-primary);
+}
+
+/* --- Human Layer Styling --- */
+
+.human-layer {
   background-color: var(--human-bg);
   background-image: url('./human_blueprint_bg.png');
   background-size: cover;
   background-position: center;
-  color: var(--human-color);
-  font-family: 'Architects Daughter', cursive;
   z-index: 2;
-  /* Default Clip path for Landscape */
+  font-family: 'Architects Daughter', cursive;
+  color: var(--human-primary);
+  /* Clip Path controls visibility */
   clip-path: polygon(var(--split-pos) 0, 100% 0, 100% 100%, var(--split-pos) 100%);
 }
 
-/* --- Content Styling --- */
-
-.content-wrapper {
-  max-width: 500px;
-  width: 100%;
-  position: relative;
-}
-
-/* Align text to sides to avoid overlap during slide */
-.ai .content-wrapper {
-  text-align: left;
-  margin-right: auto;
-  margin-left: 5%;
-}
-
-.human .content-wrapper {
-  text-align: right;
-  margin-left: auto;
-  margin-right: 5%;
-}
-
-h1 {
-  font-size: 2.5rem;
-  margin-bottom: 0.5rem;
-  text-transform: uppercase;
-}
-
-.ai h1 {
-  text-shadow: 0 0 10px var(--ai-color);
-}
-
-.human h1 {
-  transform: rotate(-2deg);
-}
-
-p {
-  font-size: 1rem;
-  line-height: 1.5;
-  font-weight: bold;
-}
-
-.meta {
-  margin-top: 1rem;
-  font-size: 0.8rem;
-  opacity: 0.8;
-  border: 1px solid currentColor;
-  padding: 0.5rem;
-  display: inline-block;
-}
-
-.ai .meta {
-  border-style: solid;
-}
-
-.human .meta {
-  border-style: dashed;
-  border-radius: 255px 15px 225px 15px/15px 225px 15px 255px;
-}
-
-/* --- UI Controls --- */
-
-.category-header {
+.human-layer .platform {
   position: absolute;
-  top: 20px;
+  background: url('./platform_texture.png');
+  background-size: 100px;
+  border: 2px solid #444;
+  border-radius: 3px 255px 5px 15px / 255px 5px 225px 5px;
+  box-shadow: 3px 3px 0 rgba(0,0,0,0.1);
+}
+
+.human-layer .player {
+    position: absolute;
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+/* Human Layer specific representation */
+.human-layer .player-1 { /* The Drone as seen by human */
+    background: white;
+    border: 2px solid black;
+    border-radius: 10px;
+}
+.human-layer .player-1::after {
+    content: 'beep boop';
+    position: absolute;
+    top: -25px;
+    left: 10px;
+    font-family: 'Architects Daughter', cursive;
+    font-size: 12px;
+    background: white;
+    padding: 2px;
+    border: 1px solid black;
+    border-radius: 50%;
+}
+
+.human-layer .player-2 { /* The Human Character */
+    background-image: url('./char_human.png');
+    filter: contrast(1.2) sepia(0.3);
+}
+
+/* --- UI / Splitter --- */
+
+.split-bar {
+  position: absolute;
+  top: 0;
+  left: var(--split-pos);
+  height: 100%;
+  width: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transform: translateX(-50%); 
+  /* We use width 0 but overflow visible content */
+}
+
+.split-line {
+  width: 4px;
+  height: 100%;
+  background: white;
+  box-shadow: 0 0 10px rgba(0,0,0,0.5);
+}
+
+.split-knob {
+  position: absolute;
+  top: 50%;
+  transform: translate(0, -50%);
+  width: 48px;
+  height: 48px;
+  background: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  color: black;
+  cursor: grab;
+}
+
+.split-knob:active {
+  cursor: grabbing;
+  transform: translate(0, -50%) scale(0.95);
+}
+
+/* --- HUD --- */
+
+.hud {
+  position: absolute;
+  bottom: 20px;
   left: 0;
   width: 100%;
   text-align: center;
-  z-index: 10;
+  z-index: 200;
   pointer-events: none;
 }
 
-.badge {
+.hud-panel {
   background: white;
-  color: black;
-  padding: 5px 15px;
-  border-radius: 20px;
-  font-weight: bold;
-  text-transform: uppercase;
-  font-family: 'Roboto Mono', monospace;
-  box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-  font-size: 0.8rem;
+  display: inline-block;
+  padding: 10px 20px;
+  border-radius: 12px;
+  box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+  pointer-events: auto;
+  font-family: sans-serif;
+  text-align: center;
 }
 
-.controls {
-  position: absolute;
-  bottom: 30px;
-  width: 100%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 20px;
-  z-index: 10;
+.hud-panel h3 {
+    margin: 0 0 5px 0;
+    font-size: 1rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.hud-panel p {
+    margin: 0 0 10px 0;
+    font-size: 0.8rem;
+    color: #666;
+}
+
+.key {
+    background: #eee;
+    padding: 2px 4px;
+    border-radius: 4px;
+    font-weight: bold;
+    font-family: monospace;
+    border: 1px solid #ddd;
 }
 
 button {
-  background: white;
+  background: #222;
+  color: white;
   border: none;
-  width: 50px;
-  height: 50px;
-  border-radius: 50%;
-  font-size: 1.5rem;
-  cursor: pointer;
-  box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-button:active {
-  transform: scale(0.95);
-}
-
-.dots {
-  display: flex;
-  gap: 8px;
-}
-
-.dot {
-  width: 10px;
-  height: 10px;
-  background: rgba(255,255,255,0.5);
-  border-radius: 50%;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 0.8rem;
   cursor: pointer;
 }
 
-.dot.active {
-  background: white;
-  transform: scale(1.2);
+button:hover {
+  background: #444;
 }
 
-/* --- The Slider Handle --- */
-
-.slider-handle {
-  position: absolute;
-  z-index: 5;
-  top: 0;
-  bottom: 0;
-  left: var(--split-pos);
-  width: 4px;
-  background: white;
-  cursor: ew-resize;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+/* --- In-World UI Elements --- */
+.ui-overlay {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    pointer-events: none;
+    padding: 20px;
 }
 
-.slider-knob {
-  width: 40px;
-  height: 40px;
-  background: white;
-  border-radius: 50%;
-  box-shadow: 0 0 15px rgba(0,0,0,0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.2rem;
+.stat-box {
+    border: 1px solid var(--ai-primary);
+    background: rgba(0, 20, 10, 0.5);
+    color: var(--ai-primary);
+    padding: 5px;
+    font-size: 10px;
+    margin-bottom: 5px;
+    width: 100px;
 }
 
-/* --- Mobile Portrait Adjustments --- */
+.doodle-text {
+    position: absolute;
+    right: 20px;
+    top: 20px;
+    transform: rotate(5deg);
+    font-size: 1.2rem;
+    color: #555;
+    text-shadow: 1px 1px 0 rgba(255,255,255,0.5);
+}
 
+/* Portrait Handling */
 @media (aspect-ratio: 1/1) , (max-aspect-ratio: 1/1) {
-  .split-layer.human {
-    /* Clip path for Portrait: Split horizontally */
-    clip-path: polygon(0 var(--split-pos), 100% var(--split-pos), 100% 100%, 0 100%);
-  }
-
-  .slider-handle {
-    top: var(--split-pos);
-    left: 0;
-    right: 0;
-    width: 100%;
-    height: 4px;
-    bottom: auto;
-    cursor: ns-resize;
-    transform: translateY(-50%);
+  /* Change split to vertical (Top/Bottom) */
+  .human-layer {
+      clip-path: polygon(0 var(--split-pos), 100% var(--split-pos), 100% 100%, 0 100%);
   }
   
-  .slider-knob {
-    transform: rotate(90deg); 
-  }
-
-  .content-wrapper {
-    max-width: 100%;
-    padding: 0 1rem;
-  }
-  
-  /* In portrait, content needs to be positioned top/bottom */
-  .ai .content-wrapper {
-    position: absolute;
-    top: 10%;
-    left: 0;
-    width: 100%;
-    text-align: center;
-    margin: 0;
-  }
-
-  .human .content-wrapper {
-    position: absolute;
-    bottom: 15%;
-    left: 0;
-    width: 100%;
-    text-align: center;
-    margin: 0;
+  .split-bar {
+      top: var(--split-pos);
+      left: 0;
+      width: 100%;
+      height: 0;
+      flex-direction: row;
+      justify-content: center;
+      transform: translateY(-50%);
   }
   
-  h1 {
-    font-size: 1.8rem;
+  .split-line {
+      width: 100%;
+      height: 4px;
   }
   
-  p {
-    font-size: 0.9rem;
+  .split-knob {
+      left: 50%;
+      top: 0;
+      transform: translate(-50%, 0);
+  }
+  
+  .split-knob svg {
+      transform: rotate(90deg);
   }
 }
