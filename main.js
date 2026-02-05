@@ -528,7 +528,7 @@ function updatePhysics() {
 }
 
 function checkCollisions(p, axis) {
-    const size = new THREE.Vector3(0.7, 1.8, 0.7); // Slightly simpler box
+    const size = new THREE.Vector3(0.7, 1.8, 0.7);
     const playerBox = new THREE.Box3();
     playerBox.setFromCenterAndSize(p.pos, size);
 
@@ -537,18 +537,22 @@ function checkCollisions(p, axis) {
             if (axis === 'y') {
                 // If we are intersecting in Y, decide if we land or hit head
                 if (p.vel.y <= 0) {
-                    // Falling or standing.
-                    // We land if our feet are not significantly below the platform's bottom.
-                    // This allows landing even if we fell "into" the box during this frame.
-                    if ((p.pos.y - size.y/2) > plat.box.min.y - 0.2) {
+                    // Landing logic:
+                    // Only snap to top if our feet were relatively close to the top surface
+                    // preventing snapping from the bottom/middle of a tall platform.
+                    // Allow some penetration (0.5) for high speed falling.
+                    if ((p.pos.y - size.y/2) > plat.box.max.y - 0.8) {
                         p.pos.y = plat.box.max.y + size.y/2;
                         p.vel.y = 0;
                         p.onGround = true;
                     }
                 } else {
-                    // Jumping up
-                    p.pos.y = plat.box.min.y - size.y/2;
-                    p.vel.y = 0;
+                    // Jumping up (Head hit)
+                    // Only hit head if we are actually below the block
+                    if ((p.pos.y + size.y/2) < plat.box.min.y + 0.8) {
+                        p.pos.y = plat.box.min.y - size.y/2;
+                        p.vel.y = 0;
+                    }
                 }
             } else if (axis === 'x') {
                 if (p.vel.x > 0) p.pos.x = plat.box.min.x - size.x/2;
@@ -607,30 +611,30 @@ function updateCameraLogic() {
 }
 
 function renderScene(camera, viewport) {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
+    const targets = [rtMask, rtAI, rtHuman];
+    const scenes = [sceneMask, sceneAI, sceneHuman];
     
-    // If viewport is defined, set scissor
-    if (viewport) {
-        renderer.setScissor(viewport.x, viewport.y, viewport.w, viewport.h);
-        renderer.setViewport(viewport.x, viewport.y, viewport.w, viewport.h);
-        renderer.setScissorTest(true);
-    } else {
-        renderer.setScissorTest(false);
-        renderer.setViewport(0, 0, w, h);
-    }
-
-    // Render Masks
-    renderer.setRenderTarget(rtMask);
-    renderer.render(sceneMask, camera);
-
-    // Render AI
-    renderer.setRenderTarget(rtAI);
-    renderer.render(sceneAI, camera);
-
-    // Render Human
-    renderer.setRenderTarget(rtHuman);
-    renderer.render(sceneHuman, camera);
+    // We must apply the viewport settings AFTER setting the render target,
+    // because setRenderTarget resets the viewport to the target's full size.
+    
+    targets.forEach((target, i) => {
+        renderer.setRenderTarget(target);
+        // Clear is handled in animate loop, or we can do it here if we want partial clears
+        // But since we are compositing, we rely on the clearing done in animate() or autoClear (which is off).
+        // Actually, for split screen, we are drawing TWICE to the same target (left side then right side).
+        // We should NOT clear inside renderScene if we want to accumulate P1 and P2 views on the same texture.
+        
+        if (viewport) {
+            renderer.setScissor(viewport.x, viewport.y, viewport.w, viewport.h);
+            renderer.setViewport(viewport.x, viewport.y, viewport.w, viewport.h);
+            renderer.setScissorTest(true);
+        } else {
+            renderer.setScissorTest(false);
+            renderer.setViewport(0, 0, target.width, target.height);
+        }
+        
+        renderer.render(scenes[i], camera);
+    });
 }
 
 function animate(t) {
@@ -648,7 +652,8 @@ function animate(t) {
     
     updateCameraLogic();
     
-    // Clearing Render Targets manually since we might render multiple times
+    // Explicitly clear all render targets once per frame
+    renderer.setScissorTest(false);
     renderer.setRenderTarget(rtMask); renderer.clear();
     renderer.setRenderTarget(rtAI); renderer.clear();
     renderer.setRenderTarget(rtHuman); renderer.clear();
@@ -661,11 +666,11 @@ function animate(t) {
         renderScene(camShared, null);
         blendUniforms.uSplit.value = 0.0;
     } else {
-        // Split View
+        // Split View - We render P1 then P2 into the SAME textures, just different viewports
         // Left: P1
-        renderScene(camP1, { x: 0, y: 0, w: w/2, h: h });
+        renderScene(camP1, { x: 0, y: 0, w: Math.ceil(w/2), h: h });
         // Right: P2
-        renderScene(camP2, { x: w/2, y: 0, w: w/2, h: h });
+        renderScene(camP2, { x: Math.floor(w/2), y: 0, w: Math.ceil(w/2), h: h });
         blendUniforms.uSplit.value = 1.0;
     }
     
