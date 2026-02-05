@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>We Can Be Different - Blueprint</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="app">
+
+    <!-- Category Header -->
+    <div class="category-header">
+        <span class="badge" id="category-label">Philosophy</span>
+    </div>
+
+    <!-- AI Layer (Back) -->
+    <div class="split-layer ai">
+        <div class="content-wrapper">
+            <h1 id="ai-title">The Machine</h1>
+            <p id="ai-desc">Efficiency. Precision. Procedural generation. The AI half is built on logic.</p>
+            <div class="meta" id="ai-vis">Visuals: Neon, Hex-codes</div>
+        </div>
+    </div>
+
+    <!-- Human Layer (Front - Clipped) -->
+    <div class="split-layer human">
+        <div class="content-wrapper">
+            <h1 id="human-title">The Creator</h1>
+            <p id="human-desc">Soul. Imperfection. Hand-crafted. The Human half is built on intuition.</p>
+            <div class="meta" id="human-vis">Visuals: Graphite, Paper</div>
+        </div>
+    </div>
+
+    <!-- Slider -->
+    <div class="slider-handle">
+        <div class="slider-knob">↔</div>
+    </div>
+
+    <!-- Navigation -->
+    <div class="controls">
+        <button id="prev-btn">←</button>
+        <div class="dots" id="dots"></div>
+        <button id="next-btn">→</button>
+    </div>
+
+</div>
+
+<script type="module" src="main.js"></script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>

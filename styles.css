@@ -1,0 +1,288 @@
+@import url('https://fonts.googleapis.com/css2?family=Architects+Daughter&family=Roboto+Mono:wght@300;700&display=swap');
+
+:root {
+  --split-pos: 50%;
+  --ai-color: #00ffcc;
+  --ai-bg: #0a0a0a;
+  --human-color: #333;
+  --human-bg: #f4e4bc;
+}
+
+* {
+  box-sizing: border-box;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body, html {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: sans-serif;
+}
+
+#app {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: black;
+}
+
+/* --- Layers --- */
+
+.split-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 2rem;
+  transition: clip-path 0.1s linear;
+}
+
+/* AI Layer (Bottom layer visually, but we reveal Human over it or vice versa. 
+   Let's actually make AI the base, Human the top with clip-path) */
+
+.split-layer.ai {
+  background-color: var(--ai-bg);
+  background-image: url('./ai_blueprint_bg.png');
+  background-size: cover;
+  background-position: center;
+  color: var(--ai-color);
+  font-family: 'Roboto Mono', monospace;
+  z-index: 1;
+}
+
+.split-layer.human {
+  background-color: var(--human-bg);
+  background-image: url('./human_blueprint_bg.png');
+  background-size: cover;
+  background-position: center;
+  color: var(--human-color);
+  font-family: 'Architects Daughter', cursive;
+  z-index: 2;
+  /* Default Clip path for Landscape */
+  clip-path: polygon(var(--split-pos) 0, 100% 0, 100% 100%, var(--split-pos) 100%);
+}
+
+/* --- Content Styling --- */
+
+.content-wrapper {
+  max-width: 500px;
+  width: 100%;
+  position: relative;
+}
+
+/* Align text to sides to avoid overlap during slide */
+.ai .content-wrapper {
+  text-align: left;
+  margin-right: auto;
+  margin-left: 5%;
+}
+
+.human .content-wrapper {
+  text-align: right;
+  margin-left: auto;
+  margin-right: 5%;
+}
+
+h1 {
+  font-size: 2.5rem;
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+}
+
+.ai h1 {
+  text-shadow: 0 0 10px var(--ai-color);
+}
+
+.human h1 {
+  transform: rotate(-2deg);
+}
+
+p {
+  font-size: 1rem;
+  line-height: 1.5;
+  font-weight: bold;
+}
+
+.meta {
+  margin-top: 1rem;
+  font-size: 0.8rem;
+  opacity: 0.8;
+  border: 1px solid currentColor;
+  padding: 0.5rem;
+  display: inline-block;
+}
+
+.ai .meta {
+  border-style: solid;
+}
+
+.human .meta {
+  border-style: dashed;
+  border-radius: 255px 15px 225px 15px/15px 225px 15px 255px;
+}
+
+/* --- UI Controls --- */
+
+.category-header {
+  position: absolute;
+  top: 20px;
+  left: 0;
+  width: 100%;
+  text-align: center;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.badge {
+  background: white;
+  color: black;
+  padding: 5px 15px;
+  border-radius: 20px;
+  font-weight: bold;
+  text-transform: uppercase;
+  font-family: 'Roboto Mono', monospace;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+  font-size: 0.8rem;
+}
+
+.controls {
+  position: absolute;
+  bottom: 30px;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 20px;
+  z-index: 10;
+}
+
+button {
+  background: white;
+  border: none;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  font-size: 1.5rem;
+  cursor: pointer;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+button:active {
+  transform: scale(0.95);
+}
+
+.dots {
+  display: flex;
+  gap: 8px;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  background: rgba(255,255,255,0.5);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.dot.active {
+  background: white;
+  transform: scale(1.2);
+}
+
+/* --- The Slider Handle --- */
+
+.slider-handle {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  bottom: 0;
+  left: var(--split-pos);
+  width: 4px;
+  background: white;
+  cursor: ew-resize;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.slider-knob {
+  width: 40px;
+  height: 40px;
+  background: white;
+  border-radius: 50%;
+  box-shadow: 0 0 15px rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+}
+
+/* --- Mobile Portrait Adjustments --- */
+
+@media (aspect-ratio: 1/1) , (max-aspect-ratio: 1/1) {
+  .split-layer.human {
+    /* Clip path for Portrait: Split horizontally */
+    clip-path: polygon(0 var(--split-pos), 100% var(--split-pos), 100% 100%, 0 100%);
+  }
+
+  .slider-handle {
+    top: var(--split-pos);
+    left: 0;
+    right: 0;
+    width: 100%;
+    height: 4px;
+    bottom: auto;
+    cursor: ns-resize;
+    transform: translateY(-50%);
+  }
+  
+  .slider-knob {
+    transform: rotate(90deg); 
+  }
+
+  .content-wrapper {
+    max-width: 100%;
+    padding: 0 1rem;
+  }
+  
+  /* In portrait, content needs to be positioned top/bottom */
+  .ai .content-wrapper {
+    position: absolute;
+    top: 10%;
+    left: 0;
+    width: 100%;
+    text-align: center;
+    margin: 0;
+  }
+
+  .human .content-wrapper {
+    position: absolute;
+    bottom: 15%;
+    left: 0;
+    width: 100%;
+    text-align: center;
+    margin: 0;
+  }
+  
+  h1 {
+    font-size: 1.8rem;
+  }
+  
+  p {
+    font-size: 0.9rem;
+  }
+}
