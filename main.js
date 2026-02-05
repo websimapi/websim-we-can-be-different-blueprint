@@ -46,6 +46,13 @@ const texHuman = loader.load('./human_blueprint_bg.png');
 const texCharAI = loader.load('./char_ai.png');
 const texCharHuman = loader.load('./char_human.png');
 const texPlatHuman = loader.load('./platform_texture.png');
+
+// Ensure correct color space for textures
+texAI.colorSpace = THREE.SRGBColorSpace;
+texHuman.colorSpace = THREE.SRGBColorSpace;
+texCharAI.colorSpace = THREE.SRGBColorSpace;
+texCharHuman.colorSpace = THREE.SRGBColorSpace;
+texPlatHuman.colorSpace = THREE.SRGBColorSpace;
 texPlatHuman.wrapS = texPlatHuman.wrapT = THREE.RepeatWrapping;
 
 // Scenes
@@ -65,11 +72,11 @@ const rtHuman = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeigh
 const postScene = new THREE.Scene();
 const postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 const blendUniforms = {
-    tAI: { value: rtAI.texture },
-    tHuman: { value: rtHuman.texture },
+    tAI: { value: null },
+    tHuman: { value: null },
     uP1: { value: new THREE.Vector2(0.5, 0.5) },
     uP2: { value: new THREE.Vector2(0.5, 0.5) },
-    uRatio: { value: window.innerWidth / window.innerHeight },
+    uRatio: { value: 1.0 },
     uTime: { value: 0 }
 };
 
@@ -92,6 +99,7 @@ const blendMaterial = new THREE.ShaderMaterial({
         varying vec2 vUv;
 
         void main() {
+            // Safety check for null textures (initially)
             vec4 colAI = texture2D(tAI, vUv);
             vec4 colHuman = texture2D(tHuman, vUv);
             
@@ -134,7 +142,7 @@ postScene.add(quad);
 function createPlatform(x, y, z, w, h, d) {
     const geo = new THREE.BoxGeometry(w, h, d);
     
-    // AI Version: Neon Wireframe / Grid
+    // AI Version: Neon Wireframe
     const matAI = new THREE.MeshBasicMaterial({ 
         color: 0x00ffcc, 
         wireframe: true,
@@ -144,7 +152,7 @@ function createPlatform(x, y, z, w, h, d) {
     const meshAI = new THREE.Mesh(geo, matAI);
     meshAI.position.set(x, y, z);
     
-    // Solid core for AI so it's not totally invisible
+    // Solid core for AI
     const coreAI = new THREE.Mesh(
         new THREE.BoxGeometry(w*0.9, h*0.9, d*0.9),
         new THREE.MeshBasicMaterial({ color: 0x001111 })
@@ -162,7 +170,7 @@ function createPlatform(x, y, z, w, h, d) {
     const meshHuman = new THREE.Mesh(geo, matHuman);
     meshHuman.position.set(x, y, z);
     
-    // Scribble edges for Human (simulated with wireframe overlay)
+    // Scribble edges for Human
     const edgesHuman = new THREE.Mesh(
         geo,
         new THREE.MeshBasicMaterial({ color: 0x222222, wireframe: true })
@@ -178,30 +186,30 @@ function createPlatform(x, y, z, w, h, d) {
 }
 
 function createPlayer(isAI) {
-    // Both scenes contain both players, but rendered slightly differently?
-    // For now, same geometry, just ensuring they exist in both scenes.
-    
     const texture = isAI ? texCharAI : texCharHuman;
-    const mat = new THREE.MeshBasicMaterial({ 
-        map: texture, 
-        transparent: true, 
-        side: THREE.DoubleSide
-    });
     const geo = new THREE.PlaneGeometry(1.2, 1.8);
     
-    const meshAI = new THREE.Mesh(geo, mat);
-    const meshHuman = new THREE.Mesh(geo, mat);
+    // --- AI Scene Mesh ---
+    // If it's the AI character, it should glow (Basic Material + Color)
+    // If it's the Human character, it looks glitched (Basic Material + Red Tint)
+    const matAI = new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        side: THREE.DoubleSide,
+        color: isAI ? 0x00ffff : 0xff4444 // Cyan for AI, Red for Human intruder
+    });
+    const meshAI = new THREE.Mesh(geo, matAI);
     
-    // In AI scene, Human player is glitched?
-    if (!isAI) {
-        // Human in AI scene
-        meshAI.material = mat.clone();
-        meshAI.material.color.setHex(0xffaaaa); // Tinted red
-    } else {
-        // AI in AI scene
-        meshAI.material = mat.clone();
-        meshAI.material.emissive = new THREE.Color(0x00ffff);
-    }
+    // --- Human Scene Mesh ---
+    // Standard materials react to light
+    const matHuman = new THREE.MeshStandardMaterial({
+        map: texture,
+        transparent: true,
+        side: THREE.DoubleSide,
+        roughness: 0.8,
+        color: !isAI ? 0xffffff : 0xaaaaaa // White for Human, Greyish for AI intruder
+    });
+    const meshHuman = new THREE.Mesh(geo, matHuman);
     
     sceneAI.add(meshAI);
     sceneHuman.add(meshHuman);
@@ -222,8 +230,8 @@ createPlatform(10, 3, 0, 4, 1, 4);
 createPlatform(0, 5, -5, 10, 1, 4);
 
 // Players
-const player1Obj = createPlayer(true);
-const player2Obj = createPlayer(false);
+const player1Obj = createPlayer(true); // AI
+const player2Obj = createPlayer(false); // Human
 
 // Lighting
 const ambAI = new THREE.AmbientLight(0x00ffcc, 0.5);
@@ -254,24 +262,34 @@ if (window.matchMedia("(max-width: 768px)").matches) {
     const zoneL = document.getElementById('zone-left');
     const zoneR = document.getElementById('zone-right');
     
-    state.joystickL = nipplejs.create({ zone: zoneL, mode: 'static', position: { left: '50%', top: '50%' }, color: 'cyan' });
-    state.joystickR = nipplejs.create({ zone: zoneR, mode: 'static', position: { left: '50%', top: '50%' }, color: 'orange' });
-    
-    state.joystickL.on('move', (evt, data) => {
-        state.joyLData.x = Math.cos(data.angle.radian) * Math.min(data.distance/50, 1);
-        state.joyLData.y = Math.sin(data.angle.radian) * Math.min(data.distance/50, 1);
-    });
-    state.joystickL.on('end', () => { state.joyLData.x = 0; state.joyLData.y = 0; });
+    try {
+        state.joystickL = nipplejs.create({ zone: zoneL, mode: 'static', position: { left: '50%', top: '50%' }, color: 'cyan' });
+        state.joystickR = nipplejs.create({ zone: zoneR, mode: 'static', position: { left: '50%', top: '50%' }, color: 'orange' });
+        
+        state.joystickL.on('move', (evt, data) => {
+            if(data.angle) {
+                state.joyLData.x = Math.cos(data.angle.radian) * Math.min(data.distance/50, 1);
+                state.joyLData.y = Math.sin(data.angle.radian) * Math.min(data.distance/50, 1);
+            }
+        });
+        state.joystickL.on('end', () => { state.joyLData.x = 0; state.joyLData.y = 0; });
 
-    state.joystickR.on('move', (evt, data) => {
-        state.joyRData.x = Math.cos(data.angle.radian) * Math.min(data.distance/50, 1);
-        state.joyRData.y = Math.sin(data.angle.radian) * Math.min(data.distance/50, 1);
-    });
-    state.joystickR.on('end', () => { state.joyRData.x = 0; state.joyRData.y = 0; });
-    
-    // Touch buttons
-    document.getElementById('btn-jump-p1').addEventListener('touchstart', (e) => { e.preventDefault(); doJump(state.p1); });
-    document.getElementById('btn-jump-p2').addEventListener('touchstart', (e) => { e.preventDefault(); doJump(state.p2); });
+        state.joystickR.on('move', (evt, data) => {
+            if(data.angle) {
+                state.joyRData.x = Math.cos(data.angle.radian) * Math.min(data.distance/50, 1);
+                state.joyRData.y = Math.sin(data.angle.radian) * Math.min(data.distance/50, 1);
+            }
+        });
+        state.joystickR.on('end', () => { state.joyRData.x = 0; state.joyRData.y = 0; });
+        
+        // Touch buttons
+        const btnP1 = document.getElementById('btn-jump-p1');
+        const btnP2 = document.getElementById('btn-jump-p2');
+        if(btnP1) btnP1.addEventListener('touchstart', (e) => { e.preventDefault(); doJump(state.p1); });
+        if(btnP2) btnP2.addEventListener('touchstart', (e) => { e.preventDefault(); doJump(state.p2); });
+    } catch (err) {
+        console.error("NippleJS init failed:", err);
+    }
 }
 
 function doJump(p) {
@@ -413,12 +431,15 @@ function animate(t) {
     // 3. Render Blend to Screen
     renderer.setRenderTarget(null);
     
-    // Update Uniforms
+    // Update Uniforms safely
     blendUniforms.tAI.value = rtAI.texture;
     blendUniforms.tHuman.value = rtHuman.texture;
     blendUniforms.uP1.value = getScreenPos(state.p1.pos);
     blendUniforms.uP2.value = getScreenPos(state.p2.pos);
-    blendUniforms.uRatio.value = window.innerWidth / window.innerHeight;
+    
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    blendUniforms.uRatio.value = h > 0 ? w / h : 1.0;
     blendUniforms.uTime.value = t * 0.001;
     
     renderer.render(postScene, postCamera);
@@ -433,7 +454,7 @@ window.addEventListener('resize', () => {
     rtHuman.setSize(w, h);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
-    blendUniforms.uRatio.value = w / h;
+    // uRatio updated in animate loop
 });
 
 // Start
