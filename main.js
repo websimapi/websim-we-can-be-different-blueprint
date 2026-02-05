@@ -65,8 +65,8 @@ const rtHuman = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeigh
 const postScene = new THREE.Scene();
 const postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 const blendUniforms = {
-    tAI: { value: null },
-    tHuman: { value: null },
+    tAI: { value: rtAI.texture },
+    tHuman: { value: rtHuman.texture },
     uP1: { value: new THREE.Vector2(0.5, 0.5) },
     uP2: { value: new THREE.Vector2(0.5, 0.5) },
     uRatio: { value: window.innerWidth / window.innerHeight },
