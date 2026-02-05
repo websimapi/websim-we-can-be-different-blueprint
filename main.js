@@ -13,8 +13,9 @@ const CONF = {
     jumpForce: 0.3,
     gravity: 0.015,
     friction: 0.85,
-    camOffset: new THREE.Vector3(0, 8, 14), // Pulled back slightly for split screen
-    bubbleRadius: 0.2
+    camOffset: new THREE.Vector3(0, 6, 14),
+    splitThreshold: 18, // Distance to trigger split screen
+    mergeThreshold: 12  // Distance to trigger merge
 };
 
 // --- Global State ---
@@ -31,15 +32,17 @@ const state = {
     joystickL: null,
     joystickR: null,
     joyLData: { x: 0, y: 0 },
-    joyRData: { x: 0, y: 0 }
+    joyRData: { x: 0, y: 0 },
+    isSplit: false
 };
 
 // --- Three.js Setup ---
 
 const container = document.getElementById('canvas-container');
-const renderer = new THREE.WebGLRenderer({ antialias: false, autoClear: false });
+const renderer = new THREE.WebGLRenderer({ antialias: false });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.autoClear = false; // We manage clearing manually
 container.appendChild(renderer.domElement);
 
 const loader = new THREE.TextureLoader();
@@ -64,18 +67,124 @@ const sceneAI = new THREE.Scene();
 sceneAI.background = texAI;
 const sceneHuman = new THREE.Scene();
 sceneHuman.background = texHuman;
+const sceneMask = new THREE.Scene();
+sceneMask.background = new THREE.Color(0x000000); // Default black (Human)
 
-// Cameras (Independent)
-const cameraP1 = new THREE.PerspectiveCamera(60, (window.innerWidth / 2) / window.innerHeight, 0.1, 100);
-const cameraP2 = new THREE.PerspectiveCamera(60, (window.innerWidth / 2) / window.innerHeight, 0.1, 100);
+// Cameras
+const ASPECT = window.innerWidth / window.innerHeight;
+const camShared = new THREE.PerspectiveCamera(60, ASPECT, 0.1, 100);
+const camP1 = new THREE.PerspectiveCamera(60, ASPECT * 0.5, 0.1, 100); // Half aspect for split
+const camP2 = new THREE.PerspectiveCamera(60, ASPECT * 0.5, 0.1, 100);
 
-// Divider Line
-const dividerScene = new THREE.Scene();
-const divGeo = new THREE.PlaneGeometry(0.01, 2);
-const divMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-const divider = new THREE.Mesh(divGeo, divMat);
-dividerScene.add(divider);
-const dividerCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+// Render Targets
+const rtAI = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
+const rtHuman = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
+const rtMask = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+
+// --- Mask Scene Setup ---
+// 1. Base World Logic: Left (<0) is AI (White), Right (>0) is Human (Black)
+const maskGeo = new THREE.PlaneGeometry(10000, 10000);
+const maskMat = new THREE.ShaderMaterial({
+    vertexShader: `
+        varying float vX;
+        void main() {
+            vX = (modelMatrix * vec4(position, 1.0)).x;
+            gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        varying float vX;
+        void main() {
+            // x < 0 = 1.0 (AI), x > 0 = 0.0 (Human)
+            float val = step(0.0, -vX); 
+            gl_FragColor = vec4(vec3(val), 1.0);
+        }
+    `
+});
+const maskPlane = new THREE.Mesh(maskGeo, maskMat);
+maskPlane.rotation.x = -Math.PI/2;
+maskPlane.position.y = -2; // Below players
+sceneMask.add(maskPlane);
+
+// 2. Player Bubbles (Lenses)
+// P1 (AI) carries an AI bubble (White)
+const bubbleGeo = new THREE.CircleGeometry(8, 32); // Larger lens for better visibility
+const bubbleMatAI = new THREE.MeshBasicMaterial({ color: 1.0 }); // White
+const bubbleP1 = new THREE.Mesh(bubbleGeo, bubbleMatAI);
+bubbleP1.rotation.x = -Math.PI/2;
+bubbleP1.position.y = -1; // Above mask plane
+sceneMask.add(bubbleP1);
+
+// P2 (Human) carries a Human bubble (Black)
+const bubbleMatHuman = new THREE.MeshBasicMaterial({ color: 0.0 }); // Black
+const bubbleP2 = new THREE.Mesh(bubbleGeo, bubbleMatHuman);
+bubbleP2.rotation.x = -Math.PI/2;
+bubbleP2.position.y = -1;
+sceneMask.add(bubbleP2);
+
+// Post-Processing Quad
+const postScene = new THREE.Scene();
+// Use a distinct camera for post processing to avoid confusion
+const orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const blendUniforms = {
+    tAI: { value: null },
+    tHuman: { value: null },
+    tMask: { value: null },
+    uTime: { value: 0 },
+    uSplit: { value: 0.0 } // 0 = merged, 1 = split
+};
+
+const blendMaterial = new THREE.ShaderMaterial({
+    uniforms: blendUniforms,
+    vertexShader: `
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        uniform sampler2D tAI;
+        uniform sampler2D tHuman;
+        uniform sampler2D tMask;
+        uniform float uTime;
+        uniform float uSplit;
+        varying vec2 vUv;
+
+        void main() {
+            vec4 colAI = texture2D(tAI, vUv);
+            vec4 colHuman = texture2D(tHuman, vUv);
+            float maskVal = texture2D(tMask, vUv).r;
+
+            // Glitch effect on mask edges
+            // Simple edge detection on mask
+            float e = 0.005;
+            float mLeft = texture2D(tMask, vUv + vec2(-e, 0)).r;
+            float mRight = texture2D(tMask, vUv + vec2(e, 0)).r;
+            float edge = abs(mLeft - mRight);
+
+            if (edge > 0.1) {
+                float noise = fract(sin(dot(vUv * uTime, vec2(12.9898, 78.233))) * 43758.5453);
+                maskVal += (noise - 0.5) * 0.5;
+            }
+
+            vec3 finalCol = mix(colHuman.rgb, colAI.rgb, clamp(maskVal, 0.0, 1.0));
+
+            // Split Screen Border Line
+            if (uSplit > 0.5) {
+                float distToCenter = abs(vUv.x - 0.5);
+                if (distToCenter < 0.002) {
+                    finalCol = vec3(0.0);
+                }
+            }
+
+            gl_FragColor = vec4(finalCol, 1.0);
+        }
+    `
+});
+
+const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), blendMaterial);
+postScene.add(quad);
 
 // --- Game Object Factories ---
 
@@ -248,32 +357,30 @@ function createChunk(cx, cz) {
 }
 
 function updateWorld() {
-    const keepKeys = new Set();
+    // Need chunks around P1 AND P2
+    const needed = new Set();
     
-    // Check chunks around BOTH players independently
     [state.p1.pos, state.p2.pos].forEach(pos => {
         const cx = Math.round(pos.x / CHUNK_SIZE);
         const cz = Math.round(pos.z / CHUNK_SIZE);
-        
-        // Load 3x3 grid around each player
         for(let x = -1; x <= 1; x++) {
             for(let z = -1; z <= 1; z++) {
-                keepKeys.add(`${cx+x},${cz+z}`);
+                needed.add(`${cx+x},${cz+z}`);
             }
         }
     });
 
     // Create missing
-    keepKeys.forEach(key => {
+    needed.forEach(key => {
         if(!chunks.has(key)) {
-            const [kx, kz] = key.split(',').map(Number);
-            createChunk(kx, kz);
+            const [cx, cz] = key.split(',').map(Number);
+            createChunk(cx, cz);
         }
     });
 
-    // Unload unused
+    // Remove unneeded
     for(const [key, val] of chunks) {
-        if(!keepKeys.has(key)) {
+        if(!needed.has(key)) {
             val.meshes.forEach(item => item.scene.remove(item.mesh));
             val.colliders.forEach(c => {
                 const idx = state.platforms.indexOf(c);
@@ -393,7 +500,7 @@ function updatePhysics() {
     // Physics Step
     [state.p1, state.p2].forEach(p => {
         p.vel.y -= CONF.gravity;
-        p.vel.y = Math.max(p.vel.y, -0.8); // Terminal velocity
+        p.vel.y = Math.max(p.vel.y, -0.9); // Cap terminal velocity
         p.vel.x *= CONF.friction;
         p.vel.z *= CONF.friction;
 
@@ -410,46 +517,38 @@ function updatePhysics() {
         p.onGround = false;
         checkCollisions(p, 'y');
         
-        // Floor clamp (Respawn logic)
-        // Lowered threshold even more to prevent accidental triggers during lag
-        if (p.pos.y < -100) {
-            p.pos.y = 10;
+        // Respawn Logic
+        if (p.pos.y < -30) {
+            // Respawn at default spawns
+            const safeX = p === state.p1 ? -7 : 7;
+            p.pos.set(safeX, 8, 0);
             p.vel.set(0,0,0);
         }
     });
 }
 
 function checkCollisions(p, axis) {
-    // Simple AABB
+    const size = new THREE.Vector3(0.7, 1.8, 0.7); // Slightly simpler box
     const playerBox = new THREE.Box3();
-    const size = new THREE.Vector3(0.6, 1.7, 0.6); // Reduced width to prevent snagging on walls
     playerBox.setFromCenterAndSize(p.pos, size);
 
     for (let plat of state.platforms) {
         if (playerBox.intersectsBox(plat.box)) {
-            
-            // X/Z Collision: Ignore if we are effectively on top of the platform
-            // This prevents the floor from ejecting the player sideways
-            if (axis === 'x' || axis === 'z') {
-                const stepHeight = 0.2; // Tolerance for "standing on"
-                if (p.pos.y >= plat.box.max.y - stepHeight) continue;
-            }
-
             if (axis === 'y') {
-                const platCenterY = (plat.box.min.y + plat.box.max.y) / 2;
-                // Robust landing: if we are mostly above the platform center, treat as landing
-                if (p.pos.y > platCenterY) {
-                    if (p.vel.y <= 0.01) { 
+                // If we are intersecting in Y, decide if we land or hit head
+                if (p.vel.y <= 0) {
+                    // Falling or standing.
+                    // We land if our feet are not significantly below the platform's bottom.
+                    // This allows landing even if we fell "into" the box during this frame.
+                    if ((p.pos.y - size.y/2) > plat.box.min.y - 0.2) {
                         p.pos.y = plat.box.max.y + size.y/2;
                         p.vel.y = 0;
                         p.onGround = true;
                     }
                 } else {
-                    // Hit head from below
-                    if (p.vel.y > 0) {
-                        p.pos.y = plat.box.min.y - size.y/2;
-                        p.vel.y = 0;
-                    }
+                    // Jumping up
+                    p.pos.y = plat.box.min.y - size.y/2;
+                    p.vel.y = 0;
                 }
             } else if (axis === 'x') {
                 if (p.vel.x > 0) p.pos.x = plat.box.min.x - size.x/2;
@@ -466,23 +565,72 @@ function checkCollisions(p, axis) {
 
 // --- Main Loop ---
 
-function updateMeshes() {
-    // Sync P1
+function updateCameraLogic() {
+    const dist = state.p1.pos.distanceTo(state.p2.pos);
+
+    // Hysteresis for split/merge
+    if (state.isSplit) {
+        if (dist < CONF.mergeThreshold) state.isSplit = false;
+    } else {
+        if (dist > CONF.splitThreshold) state.isSplit = true;
+    }
+
+    // Sync Meshes
     player1Obj.meshAI.position.copy(state.p1.pos);
     player1Obj.meshHuman.position.copy(state.p1.pos);
-    
-    // Sync P2
+    bubbleP1.position.set(state.p1.pos.x, -1, state.p1.pos.z);
+
     player2Obj.meshAI.position.copy(state.p2.pos);
     player2Obj.meshHuman.position.copy(state.p2.pos);
-    
-    // Independent Camera Control
-    const targetP1 = state.p1.pos.clone().add(CONF.camOffset);
-    cameraP1.position.lerp(targetP1, 0.1);
-    cameraP1.lookAt(state.p1.pos);
+    bubbleP2.position.set(state.p2.pos.x, -1, state.p2.pos.z);
 
-    const targetP2 = state.p2.pos.clone().add(CONF.camOffset);
-    cameraP2.position.lerp(targetP2, 0.1);
-    cameraP2.lookAt(state.p2.pos);
+    // Update Cameras
+    if (!state.isSplit) {
+        // Shared Camera
+        const mid = new THREE.Vector3().addVectors(state.p1.pos, state.p2.pos).multiplyScalar(0.5);
+        const zoom = Math.max(CONF.camOffset.z, dist * 0.8 + 5);
+        const target = new THREE.Vector3(mid.x, mid.y + CONF.camOffset.y, mid.z + zoom);
+        camShared.position.lerp(target, 0.1);
+        camShared.lookAt(mid);
+    } else {
+        // Independent Cameras
+        // P1
+        const t1 = new THREE.Vector3(state.p1.pos.x, state.p1.pos.y + CONF.camOffset.y, state.p1.pos.z + CONF.camOffset.z);
+        camP1.position.lerp(t1, 0.1);
+        camP1.lookAt(state.p1.pos);
+
+        // P2
+        const t2 = new THREE.Vector3(state.p2.pos.x, state.p2.pos.y + CONF.camOffset.y, state.p2.pos.z + CONF.camOffset.z);
+        camP2.position.lerp(t2, 0.1);
+        camP2.lookAt(state.p2.pos);
+    }
+}
+
+function renderScene(camera, viewport) {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    
+    // If viewport is defined, set scissor
+    if (viewport) {
+        renderer.setScissor(viewport.x, viewport.y, viewport.w, viewport.h);
+        renderer.setViewport(viewport.x, viewport.y, viewport.w, viewport.h);
+        renderer.setScissorTest(true);
+    } else {
+        renderer.setScissorTest(false);
+        renderer.setViewport(0, 0, w, h);
+    }
+
+    // Render Masks
+    renderer.setRenderTarget(rtMask);
+    renderer.render(sceneMask, camera);
+
+    // Render AI
+    renderer.setRenderTarget(rtAI);
+    renderer.render(sceneAI, camera);
+
+    // Render Human
+    renderer.setRenderTarget(rtHuman);
+    renderer.render(sceneHuman, camera);
 }
 
 function animate(t) {
@@ -491,7 +639,6 @@ function animate(t) {
     const dt = Math.min(clock.getDelta(), 0.1);
     timeAccumulator += dt;
 
-    // Check world based on players BEFORE physics to ensure ground exists
     updateWorld();
 
     while (timeAccumulator >= TIME_STEP) {
@@ -499,30 +646,41 @@ function animate(t) {
         timeAccumulator -= TIME_STEP;
     }
     
-    updateMeshes();
+    updateCameraLogic();
     
-    // Clear entire screen before rendering passes (since autoClear is false)
-    renderer.clear();
+    // Clearing Render Targets manually since we might render multiple times
+    renderer.setRenderTarget(rtMask); renderer.clear();
+    renderer.setRenderTarget(rtAI); renderer.clear();
+    renderer.setRenderTarget(rtHuman); renderer.clear();
 
     const w = window.innerWidth;
     const h = window.innerHeight;
 
-    renderer.setScissorTest(true);
-
-    // Render P1 (AI World) - Left Half
-    renderer.setViewport(0, 0, w/2, h);
-    renderer.setScissor(0, 0, w/2, h);
-    renderer.render(sceneAI, cameraP1);
-
-    // Render P2 (Human World) - Right Half
-    renderer.setViewport(w/2, 0, w/2, h);
-    renderer.setScissor(w/2, 0, w/2, h);
-    renderer.render(sceneHuman, cameraP2);
-
+    if (!state.isSplit) {
+        // Merged View
+        renderScene(camShared, null);
+        blendUniforms.uSplit.value = 0.0;
+    } else {
+        // Split View
+        // Left: P1
+        renderScene(camP1, { x: 0, y: 0, w: w/2, h: h });
+        // Right: P2
+        renderScene(camP2, { x: w/2, y: 0, w: w/2, h: h });
+        blendUniforms.uSplit.value = 1.0;
+    }
+    
+    // Final Composite
+    renderer.setRenderTarget(null);
     renderer.setScissorTest(false);
+    renderer.setViewport(0, 0, w, h);
+    renderer.clear();
 
-    // Render Divider Overlay
-    renderer.render(dividerScene, dividerCamera);
+    blendUniforms.tAI.value = rtAI.texture;
+    blendUniforms.tHuman.value = rtHuman.texture;
+    blendUniforms.tMask.value = rtMask.texture;
+    blendUniforms.uTime.value = t * 0.001;
+    
+    renderer.render(postScene, orthoCamera);
 }
 
 // Resize handler
@@ -530,12 +688,19 @@ window.addEventListener('resize', () => {
     const w = window.innerWidth;
     const h = window.innerHeight;
     renderer.setSize(w, h);
+    rtAI.setSize(w, h);
+    rtHuman.setSize(w, h);
+    rtMask.setSize(w, h);
     
-    cameraP1.aspect = (w / 2) / h;
-    cameraP1.updateProjectionMatrix();
+    const aspect = w / h;
+    camShared.aspect = aspect;
+    camShared.updateProjectionMatrix();
     
-    cameraP2.aspect = (w / 2) / h;
-    cameraP2.updateProjectionMatrix();
+    camP1.aspect = aspect * 0.5;
+    camP1.updateProjectionMatrix();
+    
+    camP2.aspect = aspect * 0.5;
+    camP2.updateProjectionMatrix();
 });
 
 // Start
