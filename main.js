@@ -19,6 +19,10 @@ const CONF = {
 
 // --- Global State ---
 
+const clock = new THREE.Clock();
+const TIME_STEP = 1/60;
+let timeAccumulator = 0;
+
 const state = {
     keys: {},
     p1: { pos: new THREE.Vector3(-2, 1, 0), vel: new THREE.Vector3(), onGround: false },
@@ -261,8 +265,8 @@ function createChunk(cx, cz) {
     // Floor Collider
     const floorCol = {
         box: new THREE.Box3().setFromCenterAndSize(
-            new THREE.Vector3(xOff, -1, zOff), 
-            new THREE.Vector3(CHUNK_SIZE, 2, CHUNK_SIZE)
+            new THREE.Vector3(xOff, -5, zOff), 
+            new THREE.Vector3(CHUNK_SIZE, 10, CHUNK_SIZE)
         )
     };
     state.platforms.push(floorCol);
@@ -440,6 +444,7 @@ function updatePhysics() {
     // Physics Step
     [state.p1, state.p2].forEach(p => {
         p.vel.y -= CONF.gravity;
+        p.vel.y = Math.max(p.vel.y, -0.8); // Terminal velocity
         p.vel.x *= CONF.friction;
         p.vel.z *= CONF.friction;
 
@@ -519,8 +524,16 @@ function getScreenPos(pos) {
 function animate(t) {
     requestAnimationFrame(animate);
     
+    const dt = Math.min(clock.getDelta(), 0.1);
+    timeAccumulator += dt;
+
     updateWorld();
-    updatePhysics();
+
+    while (timeAccumulator >= TIME_STEP) {
+        updatePhysics();
+        timeAccumulator -= TIME_STEP;
+    }
+    
     updateMeshes();
     
     // 1. Render AI Scene to Texture
