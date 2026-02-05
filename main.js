@@ -25,8 +25,8 @@ let timeAccumulator = 0;
 
 const state = {
     keys: {},
-    p1: { pos: new THREE.Vector3(-2, 1, 0), vel: new THREE.Vector3(), onGround: false },
-    p2: { pos: new THREE.Vector3(2, 1, 0), vel: new THREE.Vector3(), onGround: false },
+    p1: { pos: new THREE.Vector3(-7, 5, 0), vel: new THREE.Vector3(), onGround: false },
+    p2: { pos: new THREE.Vector3(7, 5, 0), vel: new THREE.Vector3(), onGround: false },
     platforms: [], // { mesh, box }
     joystickL: null,
     joystickR: null,
@@ -235,7 +235,7 @@ const fUv = floorGeo.attributes.uv;
 for(let i=0; i<fUv.count; i++) fUv.setXY(i, fUv.getX(i)*4, fUv.getY(i)*4);
 
 const floorMatHuman = new THREE.MeshStandardMaterial({ map: texPlatHuman, roughness: 1.0 });
-const floorMatAI = new THREE.MeshBasicMaterial({ color: 0x050505 });
+const floorMatAI = new THREE.MeshBasicMaterial({ color: 0x0a0a0a }); // Slightly lighter to see silhouette
 
 function createChunk(cx, cz) {
     const objects = { meshes: [], colliders: [] };
@@ -288,8 +288,12 @@ function createChunk(cx, cz) {
         const ox = (r1 - 0.5) * (CHUNK_SIZE * 0.8);
         const oz = (r2 - 0.5) * (CHUNK_SIZE * 0.8);
         
-        // Don't block center of world (0,0)
-        if (cx === 0 && cz === 0 && Math.abs(ox) < 5 && Math.abs(oz) < 5) continue;
+        // Don't block spawn areas
+        if (cx === 0 && cz === 0) {
+            if (Math.abs(ox) < 3 && Math.abs(oz) < 3) continue; // Center
+            if (Math.abs(ox - (-7)) < 4 && Math.abs(oz) < 4) continue; // P1 Spawn
+            if (Math.abs(ox - 7) < 4 && Math.abs(oz) < 4) continue; // P2 Spawn
+        }
 
         const px = xOff + ox;
         const pz = zOff + oz;
@@ -475,19 +479,28 @@ function updatePhysics() {
 function checkCollisions(p, axis) {
     // Simple AABB
     const playerBox = new THREE.Box3();
-    const size = new THREE.Vector3(0.6, 1.8, 0.2); // Thin collider for 2.5D feel
+    const size = new THREE.Vector3(0.8, 1.8, 0.8); // Thicker collider to prevent slipping/tunneling
     playerBox.setFromCenterAndSize(p.pos, size);
 
     for (let plat of state.platforms) {
         if (playerBox.intersectsBox(plat.box)) {
             if (axis === 'y') {
-                if (p.vel.y < 0) { // Landing
-                    p.pos.y = plat.box.max.y + size.y/2;
-                    p.vel.y = 0;
-                    p.onGround = true;
-                } else { // Head hit
-                    p.pos.y = plat.box.min.y - size.y/2;
-                    p.vel.y = 0;
+                const platCenterY = (plat.box.min.y + plat.box.max.y) / 2;
+                // Robust landing: if we are mostly above the platform center, treat as landing
+                if (p.pos.y > platCenterY) {
+                    // Only land if we aren't moving up rapidly (allows jumping through thin platforms if desired, but here we want solidity)
+                    // We check vel.y <= 0.01 to catch standing (0) and falling (<0)
+                    if (p.vel.y <= 0.01) { 
+                        p.pos.y = plat.box.max.y + size.y/2;
+                        p.vel.y = 0;
+                        p.onGround = true;
+                    }
+                } else {
+                    // Hit head from below
+                    if (p.vel.y > 0) {
+                        p.pos.y = plat.box.min.y - size.y/2;
+                        p.vel.y = 0;
+                    }
                 }
             } else if (axis === 'x') {
                 if (p.vel.x > 0) p.pos.x = plat.box.min.x - size.x/2;
@@ -515,7 +528,13 @@ function updateMeshes() {
     
     // Camera Follow (Average of P1 and P2)
     const mid = new THREE.Vector3().addVectors(state.p1.pos, state.p2.pos).multiplyScalar(0.5);
-    camera.position.lerp(new THREE.Vector3(mid.x, mid.y, mid.z).add(CONF.camOffset), 0.1);
+    
+    // Dynamic zoom based on distance to keep both players in frame
+    const dist = state.p1.pos.distanceTo(state.p2.pos);
+    const zoomZ = Math.max(CONF.camOffset.z, dist * 0.9);
+    const targetCamPos = new THREE.Vector3(mid.x, mid.y + CONF.camOffset.y, mid.z + zoomZ);
+    
+    camera.position.lerp(targetCamPos, 0.1);
     camera.lookAt(mid);
 }
 
