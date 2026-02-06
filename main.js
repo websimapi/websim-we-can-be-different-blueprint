@@ -55,12 +55,7 @@ container.appendChild(renderer.domElement);
 const loader = new THREE.TextureLoader();
 
 // Load Assets
-const texAI = loader.load('./ai_blueprint_bg.png');
-texAI.colorSpace = THREE.SRGBColorSpace;
-
-const texHuman = loader.load('./human_blueprint_bg.png');
-texHuman.colorSpace = THREE.SRGBColorSpace;
-
+// Removed background textures from scene.background to prevent WebGL uniform crashes
 const texCharAI = loader.load('./char_ai.png');
 texCharAI.colorSpace = THREE.SRGBColorSpace;
 
@@ -75,11 +70,11 @@ texPlat.wrapS = texPlat.wrapT = THREE.RepeatWrapping;
 // We use TWO completely separate scenes to guarantee 100% style separation
 // They will share geometry data (collider boxes) but have different meshes.
 const sceneLeft = new THREE.Scene();
-sceneLeft.background = texAI;
+sceneLeft.background = new THREE.Color(0x050505);
 sceneLeft.fog = new THREE.FogExp2(0x001133, 0.015);
 
 const sceneRight = new THREE.Scene();
-sceneRight.background = texHuman;
+sceneRight.background = new THREE.Color(0xf4e4bc);
 sceneRight.fog = new THREE.FogExp2(0xeeddcc, 0.015);
 
 // Cameras
@@ -92,12 +87,14 @@ const cameraRight = new THREE.PerspectiveCamera(50, aspect, 0.1, 1000);
 const lightAI = new THREE.DirectionalLight(0x00ffff, 2);
 lightAI.position.set(10, 50, 20);
 sceneLeft.add(lightAI);
+sceneLeft.add(lightAI.target); // Explicitly add target to prevent matrix update errors
 sceneLeft.add(new THREE.AmbientLight(0x002244, 1.5));
 
 // Human Lighting
 const lightHuman = new THREE.DirectionalLight(0xffaa55, 2);
 lightHuman.position.set(-10, 50, 20);
 sceneRight.add(lightHuman);
+sceneRight.add(lightHuman.target); // Explicitly add target to prevent matrix update errors
 sceneRight.add(new THREE.AmbientLight(0x665544, 1.5));
 
 // --- ASSET FACTORIES ---
@@ -179,10 +176,11 @@ function createChunk(cx, cz) {
     chunkData.meshes.push({ s: sceneRight, m: humanFloor });
 
     // Collider for Floor (Safe Zone)
+    // Made significantly deeper to prevent tunneling/falling through
     const floorCol = {
         box: new THREE.Box3().setFromCenterAndSize(
-            new THREE.Vector3(xBase, -5, zBase),
-            new THREE.Vector3(CHUNK_SIZE, 10, CHUNK_SIZE)
+            new THREE.Vector3(xBase, -25, zBase),
+            new THREE.Vector3(CHUNK_SIZE, 50, CHUNK_SIZE)
         )
     };
     state.platforms.push(floorCol);
